@@ -50,7 +50,7 @@ Two GitHub Actions workflows live in `.github/workflows/`:
 
 - **`test`** runs `mvn verify` on Ubuntu for every pull request, on each push to the pull request.
 - **`release`** is started by hand from the Actions tab, with a version such as `1.0.0`. It builds and tests the
-  uber jar, and builds native binaries for Linux (x64), macOS (arm64) and Windows (x64), with a smoke test on each.
+  uber jar, and builds native binaries for Linux (x64), macOS (arm64 and x64) and Windows (x64), with a smoke test on each.
   It then creates the GitHub release `v<version>` with all of them attached. The version is set only in the
   runner's copy of the pom, so the committed pom keeps `0.1.0-SNAPSHOT`.
 

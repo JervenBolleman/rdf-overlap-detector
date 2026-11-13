@@ -70,6 +70,9 @@ jobs:
           - os: macos-latest
             platform: macos-arm64
             ext: ''
+          - os: macos-15-intel
+            platform: macos-x64
+            ext: ''
           - os: windows-latest
             platform: windows-x64
             ext: '.exe'
