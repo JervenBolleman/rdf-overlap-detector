@@ -108,37 +108,92 @@
 
   <build>
     <plugins>
-      <!-- Copies the runtime dependencies to target/lib, so the jar can run with java -jar. -->
+      <!-- One runnable jar with every runtime dependency. Service files are merged rather than overwritten. -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-dependency-plugin</artifactId>
-        <version>3.8.1</version>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.2</version>
         <executions>
           <execution>
-            <id>copy-runtime-dependencies</id>
             <phase>package</phase>
             <goals>
-              <goal>copy-dependencies</goal>
+              <goal>shade</goal>
             </goals>
             <configuration>
-              <outputDirectory>${project.build.directory}/lib</outputDirectory>
-              <includeScope>runtime</includeScope>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <shadedArtifactAttached>false</shadedArtifactAttached>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <!-- Signatures of the dependency jars are invalid once merged. -->
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                    <exclude>META-INF/*.EC</exclude>
+                    <!-- Per-jar module descriptors cannot be merged onto the classpath. -->
+                    <exclude>module-info.class</exclude>
+                    <exclude>META-INF/versions/*/module-info.class</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+              <transformers>
+                <!-- Merges META-INF/services files, which RDF4j uses to register parsers, and Hardwood its codecs. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                <!-- Keep every copy of this notice, so each dependency's terms stay in the jar. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                  <resource>META-INF/LICENSE</resource>
+                </transformer>
+                <!-- Keep every copy of this notice, so each dependency's terms stay in the jar. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                  <resource>META-INF/LICENSE.txt</resource>
+                </transformer>
+                <!-- Keep every copy of this notice, so each dependency's terms stay in the jar. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                  <resource>META-INF/LICENSE.md</resource>
+                </transformer>
+                <!-- Keep every copy of this notice, so each dependency's terms stay in the jar. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                  <resource>META-INF/LICENSE-notice.md</resource>
+                </transformer>
+                <!-- Keep every copy of this notice, so each dependency's terms stay in the jar. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                  <resource>META-INF/NOTICE</resource>
+                </transformer>
+                <!-- Keep every copy of this notice, so each dependency's terms stay in the jar. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                  <resource>META-INF/NOTICE.txt</resource>
+                </transformer>
+                <!-- Keep every copy of this notice, so each dependency's terms stay in the jar. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                  <resource>META-INF/NOTICE.md</resource>
+                </transformer>
+                <!-- Keep every copy of this notice, so each dependency's terms stay in the jar. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                  <resource>META-INF/DEPENDENCIES</resource>
+                </transformer>
+                <!-- Keep every copy of this notice, so each dependency's terms stay in the jar. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                  <resource>META-INF/FastDoubleParser-LICENSE</resource>
+                </transformer>
+                <!-- Keep every copy of this notice, so each dependency's terms stay in the jar. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                  <resource>META-INF/FastDoubleParser-ThirdParty-LICENSE</resource>
+                </transformer>
+                <!-- Keep every copy of this notice, so each dependency's terms stay in the jar. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                  <resource>META-INF/Schubfach-LICENSE</resource>
+                </transformer>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <manifestEntries>
+                    <Main-Class>swiss.sib.rdfoverlap.Main</Main-Class>
+                    <Multi-Release>true</Multi-Release>
+                  </manifestEntries>
+                </transformer>
+              </transformers>
             </configuration>
           </execution>
         </executions>
-      </plugin>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-jar-plugin</artifactId>
-        <configuration>
-          <archive>
-            <manifest>
-              <mainClass>swiss.sib.rdfoverlap.Main</mainClass>
-              <addClasspath>true</addClasspath>
-              <classpathPrefix>lib/</classpathPrefix>
-            </manifest>
-          </archive>
-        </configuration>
       </plugin>
     </plugins>
   </build>

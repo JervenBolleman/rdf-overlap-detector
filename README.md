@@ -15,8 +15,9 @@ written as parquet files and as a [VoID](https://www.w3.org/TR/void/) descriptio
 mvn package
 ```
 
-This writes `target/rdf-overlap-detector-0.1.0-SNAPSHOT.jar` and copies the runtime dependencies to `target/lib/`.
-Keep the two together, because the jar's manifest refers to `lib/`.
+This writes one self-contained jar, `target/rdf-overlap-detector-0.1.0-SNAPSHOT.jar`, with all runtime dependencies
+included. The shade plugin merges the `META-INF/services` files, so RDF4j finds all its parsers and writers. It
+drops dependency signatures and per-jar `module-info` descriptors, which would be invalid once merged.
 
 Run the tests with `mvn test`.
 
