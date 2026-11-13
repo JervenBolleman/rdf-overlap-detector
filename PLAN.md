@@ -207,3 +207,15 @@ Harness note: a background run was killed when the tool call that started it end
 1. Is the overlap prefix depth default of 2 path segments right for your datasets? Some IRI schemes encode everything in one segment, which would make the ranges too coarse.
 2. Should the overlap output include exact IRIs as well as the range summary? That could be very large.
 3. Do you want the extracted parquet files to keep the source dataset name and file path as columns, for traceability?
+
+## VoID output (added after Phase 7)
+
+`overlap` also writes `<outDir>/void.ttl` (Turtle, https://www.w3.org/TR/void/). Options:
+
+- `--void-base=IRI` sets the base for dataset and linkset IRIs. The default is `urn:rdf-overlap:`.
+- Each dataset is a `void:Dataset` with `void:entities` = its distinct IRIs. Each range it shares with another dataset is a `void:subset` with `void:uriSpace` = the range key.
+- Each pair is a `void:Linkset` with `void:subjectsTarget` and `void:objectsTarget`. `void:triples` = the shared IRIs. Each shared range is a sub-linkset.
+- A link means the same IRI occurs in both datasets. It is not a triple asserted in either dataset, so the linksets have no `void:linkPredicate`.
+- Dataset names must match `[A-Za-z0-9._-]+`, because they become IRI path segments.
+
+Checked on the Phase 7 datasets: the Rhea subset counts sum to its 235,418 IRIs, and the Rhea–test linkset has 235,418 triples. Covered by `VoidWriterTest` and a CLI test. 112 tests pass.

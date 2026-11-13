@@ -18,7 +18,7 @@ public final class Main {
             commands:
               extract   write one parquet file of IRI components per RDF dataset
               sort      merge extracted batches into one sorted, deduplicated IRI file per dataset
-              overlap   report IRI ranges that appear in two or more datasets
+              overlap   report IRI ranges that appear in two or more datasets, as VoID in void.ttl
             """;
 
     private Main() {
@@ -57,21 +57,29 @@ public final class Main {
         };
     }
 
-    /** overlap &lt;outDir&gt; &lt;datasetDir&gt;...: compares every pair of sorted datasets. */
+    /** overlap [--void-base=IRI] &lt;outDir&gt; &lt;datasetDir&gt;...: compares every pair of sorted datasets. */
     private static int overlap(String[] args, PrintStream out, PrintStream err) {
-        if (args.length < 4) {
-            err.println("usage: rdf-overlap-detector overlap <outDir> <datasetDir> <datasetDir> [more...]");
+        String voidBase = OverlapDetector.DEFAULT_VOID_BASE;
+        int first = 1;
+        if (first < args.length && args[first].startsWith("--void-base=")) {
+            voidBase = args[first].substring("--void-base=".length());
+            first++;
+        }
+        if (args.length - first < 3) {
+            err.println("usage: rdf-overlap-detector overlap [--void-base=IRI] <outDir> <datasetDir> <datasetDir> [more...]");
             return 1;
         }
         List<Path> datasets = new ArrayList<>();
-        for (int i = 2; i < args.length; i++) {
+        for (int i = first + 1; i < args.length; i++) {
             datasets.add(Path.of(args[i]));
         }
+        Path outDir = Path.of(args[first]);
         try {
-            for (OverlapDetector.PairSummary s : new OverlapDetector().detect(datasets, Path.of(args[1]))) {
+            for (OverlapDetector.PairSummary s : new OverlapDetector().detect(datasets, outDir, voidBase)) {
                 out.printf("%s %s ranges=%d/%d sharedRanges=%d sharedIris=%d%n", s.first(), s.second(),
                         s.rangesFirst(), s.rangesSecond(), s.sharedRanges(), s.sharedIris());
             }
+            out.println("void description: " + outDir.resolve("void.ttl"));
             return 0;
         } catch (IOException | IllegalArgumentException e) {
             err.println("overlap failed: " + e.getMessage());

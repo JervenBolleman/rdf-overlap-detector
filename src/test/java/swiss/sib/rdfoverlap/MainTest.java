@@ -67,6 +67,20 @@ class MainTest {
         assertEquals(0, r.code, r.err);
         assertTrue(r.out.contains("sharedIris=4"), r.out);
         assertTrue(Files.exists(dir.resolve("out").resolve("a__b.parquet")));
+        assertTrue(Files.exists(dir.resolve("out").resolve("void.ttl")));
+        assertTrue(r.out.contains("void description:"), r.out);
+    }
+
+    @Test
+    void overlapAcceptsAVoidBaseOption(@TempDir Path dir) {
+        for (String name : new String[] {"a", "b"}) {
+            assertEquals(0, run("extract", "src/test/resources/samples/sample.nt.xz", dir.resolve(name).toString()).code);
+            assertEquals(0, run("sort", dir.resolve(name).toString()).code);
+        }
+        Result r = run("overlap", "--void-base=https://example.org/void/", dir.resolve("out").toString(),
+                dir.resolve("a").toString(), dir.resolve("b").toString());
+        assertEquals(0, r.code, r.err);
+        assertTrue(r.out.contains("sharedIris=4"), r.out);
     }
 
     @Test

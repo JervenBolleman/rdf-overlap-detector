@@ -9,21 +9,31 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.regex.Pattern;
 
 /**
- * Finds the IRI ranges that two or more datasets have in common.
+ * Finds the IRI ranges that two or more datasets have in common, and describes the result as VoID.
  *
  * <p>Each dataset's sorted IRI file is read once to count the IRIs in each range, giving a sorted map from range
  * key to count. For every pair of datasets, the ranges that both maps contain are the overlapping ranges. A
  * streaming merge of the two sorted IRI files then counts the IRIs the pair shares in each range.
  *
  * <p>Output for a pair {@code A} and {@code B} goes to {@code <outDir>/A__B.parquet}, with one row per shared range
- * sorted by range key. A {@code summary.csv} in {@code outDir} has one line per pair.
+ * sorted by range key. A {@code summary.csv} in {@code outDir} has one line per pair. {@code void.ttl} describes
+ * the datasets and the pairwise linksets in VoID, see {@link VoidWriter}.
  *
  * <p>The range maps are kept in memory, one entry per range and not per IRI. The number of ranges is usually far
  * smaller than the number of IRIs, so this is the expected bound.
  */
 public final class OverlapDetector {
+
+    public static final int DEFAULT_DEPTH = RangeKey.DEFAULT_DEPTH;
+
+    /** Base for the VoID IRIs of datasets and linksets when none is given. */
+    public static final String DEFAULT_VOID_BASE = "urn:rdf-overlap:";
+
+    /** Dataset names become IRI path segments, so they are restricted to characters that need no escaping. */
+    private static final Pattern NAME = Pattern.compile("[A-Za-z0-9._-]+");
 
     /**
      * Summary of one pair of datasets.
@@ -40,10 +50,30 @@ public final class OverlapDetector {
                               int sharedRanges, long sharedIris, Path output) {
     }
 
+    /**
+     * One range that two datasets share.
+     *
+     * @param range       the range key
+     * @param countFirst  IRIs of the first dataset in the range
+     * @param countSecond IRIs of the second dataset in the range
+     * @param sharedIris  IRIs both datasets have in the range
+     */
+    record SharedRange(String range, long countFirst, long countSecond, long sharedIris) {
+    }
+
+    /**
+     * Everything the pair produced: its summary and the ranges it shares, sorted by range key.
+     *
+     * @param summary the pair summary
+     * @param ranges  the shared ranges
+     */
+    record PairResult(PairSummary summary, List<SharedRange> ranges) {
+    }
+
     private final int depth;
 
     public OverlapDetector() {
-        this(RangeKey.DEFAULT_DEPTH);
+        this(DEFAULT_DEPTH);
     }
 
     public OverlapDetector(int depth) {
@@ -54,14 +84,27 @@ public final class OverlapDetector {
     }
 
     /**
-     * Compares every pair of datasets.
+     * Compares every pair of datasets, using the default VoID base.
      *
      * @param datasetDirs dataset directories, each holding {@code iris/iris.parquet} from the sort phase
-     * @param outDir      directory for the pair files and the summary
+     * @param outDir      directory for the pair files, the summary and the VoID description
      * @return one summary per pair, in dataset order
      * @throws IOException if a dataset cannot be read or the output cannot be written
      */
     public List<PairSummary> detect(List<Path> datasetDirs, Path outDir) throws IOException {
+        return detect(datasetDirs, outDir, DEFAULT_VOID_BASE);
+    }
+
+    /**
+     * Compares every pair of datasets.
+     *
+     * @param datasetDirs dataset directories, each holding {@code iris/iris.parquet} from the sort phase
+     * @param outDir      directory for the pair files, the summary and the VoID description
+     * @param voidBase    base IRI for the VoID dataset and linkset IRIs, such as {@code https://example.org/void/}
+     * @return one summary per pair, in dataset order
+     * @throws IOException if a dataset cannot be read or the output cannot be written
+     */
+    public List<PairSummary> detect(List<Path> datasetDirs, Path outDir, String voidBase) throws IOException {
         if (datasetDirs.size() < 2) {
             throw new IllegalArgumentException("need at least two datasets, got " + datasetDirs.size());
         }
@@ -72,6 +115,9 @@ public final class OverlapDetector {
         List<TreeMap<String, Long>> ranges = new ArrayList<>();
         for (Path dir : datasetDirs) {
             String name = dir.getFileName().toString();
+            if (!NAME.matcher(name).matches()) {
+                throw new IllegalArgumentException("dataset name must match [A-Za-z0-9._-]+: " + name);
+            }
             if (names.contains(name)) {
                 throw new IllegalArgumentException("two datasets are named " + name);
             }
@@ -81,14 +127,24 @@ public final class OverlapDetector {
             ranges.add(rangeCounts(iris));
         }
 
-        List<PairSummary> summaries = new ArrayList<>();
+        List<PairResult> results = new ArrayList<>();
         for (int i = 0; i < names.size(); i++) {
             for (int j = i + 1; j < names.size(); j++) {
-                summaries.add(comparePair(names.get(i), names.get(j), ranges.get(i), ranges.get(j),
+                results.add(comparePair(names.get(i), names.get(j), ranges.get(i), ranges.get(j),
                         irisFiles.get(i), irisFiles.get(j), outDir));
             }
         }
+        List<PairSummary> summaries = new ArrayList<>();
+        for (PairResult r : results) {
+            summaries.add(r.summary());
+        }
         writeSummary(summaries, outDir.resolve("summary.csv"));
+
+        List<Long> totals = new ArrayList<>();
+        for (TreeMap<String, Long> map : ranges) {
+            totals.add(map.values().stream().mapToLong(Long::longValue).sum());
+        }
+        VoidWriter.write(outDir.resolve("void.ttl"), voidBase, names, totals, results);
         return summaries;
     }
 
@@ -104,8 +160,8 @@ public final class OverlapDetector {
         return counts;
     }
 
-    private PairSummary comparePair(String nameA, String nameB, TreeMap<String, Long> rangesA,
-                                    TreeMap<String, Long> rangesB, Path irisA, Path irisB, Path outDir)
+    private PairResult comparePair(String nameA, String nameB, TreeMap<String, Long> rangesA,
+                                   TreeMap<String, Long> rangesB, Path irisA, Path irisB, Path outDir)
             throws IOException {
         List<String> shared = new ArrayList<>();
         for (String range : rangesA.keySet()) {
@@ -115,19 +171,26 @@ public final class OverlapDetector {
         }
         Map<String, Long> sharedIris = sharedIrisByRange(irisA, irisB);
 
-        Path output = outDir.resolve(nameA + "__" + nameB + ".parquet");
+        List<SharedRange> sharedRanges = new ArrayList<>();
         long total = 0;
+        for (String range : shared) {
+            long common = sharedIris.getOrDefault(range, 0L);
+            sharedRanges.add(new SharedRange(range, rangesA.get(range), rangesB.get(range), common));
+            total += common;
+        }
+
+        Path output = outDir.resolve(nameA + "__" + nameB + ".parquet");
         try (OverlapParquetWriter writer = new OverlapParquetWriter(output)) {
-            for (String range : shared) {
-                long common = sharedIris.getOrDefault(range, 0L);
-                writer.write(range, rangesA.get(range), rangesB.get(range), common);
-                total += common;
+            for (SharedRange r : sharedRanges) {
+                writer.write(r.range(), r.countFirst(), r.countSecond(), r.sharedIris());
             }
-            if (!shared.isEmpty()) {
+            if (!sharedRanges.isEmpty()) {
                 writer.endRowGroup();
             }
         }
-        return new PairSummary(nameA, nameB, rangesA.size(), rangesB.size(), shared.size(), total, output);
+        PairSummary summary = new PairSummary(nameA, nameB, rangesA.size(), rangesB.size(), shared.size(), total,
+                output);
+        return new PairResult(summary, sharedRanges);
     }
 
     /** Streams two sorted IRI files together and counts the IRIs they have in common, per range. */
