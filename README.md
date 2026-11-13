@@ -21,6 +21,41 @@ drops dependency signatures and per-jar `module-info` descriptors, which would b
 
 Run the tests with `mvn test`.
 
+## Native image (experimental)
+
+A GraalVM native executable starts without a JVM. It is an opt-in Maven profile, so `mvn package` is unchanged.
+
+```sh
+export GRAALVM_HOME=/path/to/graalvm-25
+$GRAALVM_HOME/bin/gu install native-image   # only if native-image is not already installed
+mvn -Pnative package
+target/rdf-overlap-detector  help
+```
+
+Requirements:
+
+- GraalVM for JDK 25, with `native-image`. The native build is run and tested on GraalVM 25.
+- A C toolchain such as `gcc`.
+- A writable `/tmp`. The `native-image` launcher writes its argument files there and ignores `TMPDIR`, `TMP` and
+  `TEMP`.
+- Network access during the build. The profile fetches GraalVM reachability metadata for libraries that need it.
+
+Status: the native build works on GraalVM 25 when run locally. The `release` workflow's native jobs have not run yet,
+because the repository is not on GitHub. Any `.zst` input that fails in a native binary is worth reporting with the
+build log and the stack trace.
+
+## Continuous integration and releases
+
+Two GitHub Actions workflows live in `.github/workflows/`:
+
+- **`test`** runs `mvn verify` on Ubuntu for every pull request, on each push to the pull request.
+- **`release`** is started by hand from the Actions tab, with a version such as `1.0.0`. It builds and tests the
+  uber jar, and builds native binaries for Linux (x64), macOS (arm64) and Windows (x64), with a smoke test on each.
+  It then creates the GitHub release `v<version>` with all of them attached. The version is set only in the
+  runner's copy of the pom, so the committed pom keeps `0.1.0-SNAPSHOT`.
+
+The workflows have not run yet, because the repository is not on GitHub.
+
 ## Commands
 
 ```sh

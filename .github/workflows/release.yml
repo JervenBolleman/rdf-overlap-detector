@@ -1,0 +1,145 @@
+name: release
+
+# Run by hand from the Actions tab. Builds the uber jar and native binaries for Linux, macOS and Windows,
+# then publishes them as one GitHub release tagged v<version>.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, for example 1.0.0 or 1.0.0-rc.1'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the version string
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
+            echo "Not a valid version: $VERSION" >&2
+            exit 1
+          fi
+
+  uber-jar:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Set the release version in the pom
+        env:
+          VERSION: ${{ inputs.version }}
+        run: >-
+          mvn -B -DgenerateBackupPoms=false
+          org.codehaus.mojo:versions-maven-plugin:2.18.0:set -DnewVersion="$VERSION"
+
+      - name: Build and test the uber jar
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          mvn -B verify
+          mkdir dist
+          cp "target/rdf-overlap-detector-$VERSION.jar" "dist/rdf-overlap-detector-$VERSION-uber.jar"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uber-jar
+          path: dist/*
+
+  native:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+            ext: ''
+          - os: macos-latest
+            platform: macos-arm64
+            ext: ''
+          - os: windows-latest
+            platform: windows-x64
+            ext: '.exe'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: graalvm
+          components: native-image
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: maven
+
+      - name: Set up the MSVC toolchain
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set the release version in the pom
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: >-
+          mvn -B -DgenerateBackupPoms=false
+          org.codehaus.mojo:versions-maven-plugin:2.18.0:set -DnewVersion="$VERSION"
+
+      - name: Build the native binary
+        shell: bash
+        run: mvn -B -Pnative -DskipTests package
+
+      - name: Smoke test the binary
+        shell: bash
+        env:
+          EXT: ${{ matrix.ext }}
+        run: |
+          BIN="target/rdf-overlap-detector$EXT"
+          "$BIN" help
+          # The .zst sample exercises the zstd native library, the part most likely to break.
+          OUT="$RUNNER_TEMP/smoke-out"
+          "$BIN" extract src/test/resources/samples/sample.nt.zst "$OUT" | tee "$RUNNER_TEMP/smoke.txt"
+          grep -q 'statements=3' "$RUNNER_TEMP/smoke.txt"
+
+      - name: Name the binary for the release
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          EXT: ${{ matrix.ext }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          mkdir dist
+          cp "target/rdf-overlap-detector$EXT" "dist/rdf-overlap-detector-$VERSION-$PLATFORM$EXT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.platform }}
+          path: dist/*
+
+  publish:
+    needs: [uber-jar, native]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          gh release create "v$VERSION" dist/* --title "v$VERSION" --generate-notes
