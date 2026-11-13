@@ -219,3 +219,18 @@ Harness note: a background run was killed when the tool call that started it end
 - Dataset names must match `[A-Za-z0-9._-]+`, because they become IRI path segments.
 
 Checked on the Phase 7 datasets: the Rhea subset counts sum to its 235,418 IRIs, and the Rhea–test linkset has 235,418 triples. Covered by `VoidWriterTest` and a CLI test. 112 tests pass.
+
+## Directory input (added after the VoID output)
+
+`extract` accepts a file or a directory. For a directory, every regular file below it is tried in sorted order, and the
+output is one dataset.
+
+- A file that does not parse, such as a non-RDF file, is skipped. It is reported on stderr with the reason, and its
+  partial runs are removed. A single file that does not parse is still an error.
+- A failure to write output always stops the run, so a full disk is not reported as a skipped file.
+- Files under the output directory are left out, so a dataset directory can sit inside its input directory.
+- Run files are prefixed with the index of their input file. The predicates are one set for the whole dataset.
+- Each extraction replaces the previous output of that dataset.
+
+Covered by new `IriExtractorTest` cases (mixed RDF, non-RDF and broken files; subdirectories; output inside the
+input; re-running; a directory with no RDF; a single non-RDF file) and a CLI test on the sample directory. 118 tests pass.

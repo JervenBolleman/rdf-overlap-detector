@@ -116,6 +116,16 @@ class MainTest {
     }
 
     @Test
+    void extractReadsEveryRdfFileInADirectory(@TempDir Path dir) {
+        Result r = run("extract", "src/test/resources/samples", dir.toString());
+        assertEquals(0, r.code, r.err);
+        assertTrue(r.out.contains("files=17"), r.out);
+        assertTrue(r.out.contains("skipped=0"), r.out);
+        assertEquals(0, run("sort", dir.toString()).code);
+        assertTrue(Files.exists(dir.resolve("iris").resolve("iris.parquet")));
+    }
+
+    @Test
     void extractNeedsTwoArguments() {
         Result r = run("extract", "only-one-arg");
         assertEquals(1, r.code);

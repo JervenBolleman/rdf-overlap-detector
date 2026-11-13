@@ -16,7 +16,7 @@ public final class Main {
             usage: rdf-overlap-detector <command> [args]
 
             commands:
-              extract   write one parquet file of IRI components per RDF dataset
+              extract   write the IRIs of one RDF file, or of a directory of RDF files, as sorted runs
               sort      merge extracted batches into one sorted, deduplicated IRI file per dataset
               overlap   report IRI ranges that appear in two or more datasets, as VoID in void.ttl
             """;
@@ -104,7 +104,7 @@ public final class Main {
         }
     }
 
-    /** extract &lt;input&gt; &lt;outDir&gt;: runs the extractor on one RDF file. */
+    /** extract &lt;input&gt; &lt;outDir&gt;: extracts one RDF file, or every RDF file under a directory. */
     private static int extract(String[] args, PrintStream out, PrintStream err) {
         if (args.length != 3) {
             err.println("usage: rdf-overlap-detector extract <input> <outDir>");
@@ -112,8 +112,12 @@ public final class Main {
         }
         try {
             IriExtractor.ExtractionSummary summary = new IriExtractor(Path.of(args[2])).extract(Path.of(args[1]));
-            out.printf("statements=%d runs=%d predicates=%d rejectedIris=%d%n",
-                    summary.statements(), summary.runs().size(), summary.predicates(), summary.rejectedIris());
+            for (IriExtractor.Skipped skip : summary.skipped()) {
+                err.println("skipped (not RDF): " + skip.file() + ": " + skip.reason());
+            }
+            out.printf("files=%d skipped=%d statements=%d runs=%d predicates=%d rejectedIris=%d%n",
+                    summary.files(), summary.skipped().size(), summary.statements(), summary.runs().size(),
+                    summary.predicates(), summary.rejectedIris());
             return 0;
         } catch (IOException | RDF4JException e) {
             err.println("extract failed: " + e.getMessage());

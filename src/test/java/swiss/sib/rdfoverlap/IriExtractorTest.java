@@ -88,6 +88,84 @@ class IriExtractorTest {
         assertEquals(List.of("http://example.org/o", "http://example.org/s"), readIris(summary.runs()));
     }
 
+    /** Copies one sample into a directory, keeping its name. */
+    private static Path copySample(String name, Path into) throws IOException {
+        Files.createDirectories(into);
+        return Files.copy(Path.of("src/test/resources/samples").resolve(name), into.resolve(name));
+    }
+
+    @Test
+    void directoryExtractsEveryRdfFileAndSkipsTheRest() throws IOException {
+        Path input = dir.resolve("input");
+        copySample("sample.nt", input);
+        copySample("sample.ttl.gz", input.resolve("nested"));
+        Files.writeString(input.resolve("notes.txt"), "This is not RDF.\n");
+        Files.writeString(input.resolve("broken.nt"), "<http://ex/a> <http://ex/p> <http://ex/b> .\n<http://ex/c> <http://ex/p>\n");
+
+        IriExtractor.ExtractionSummary summary = new IriExtractor(dir.resolve("ds")).extract(input);
+
+        assertEquals(2, summary.files());
+        assertEquals(6, summary.statements());
+        assertEquals(2, summary.predicates());
+        assertEquals(2, summary.skipped().size());
+        List<String> skippedNames = summary.skipped().stream().map(s -> s.file().getFileName().toString()).toList();
+        assertEquals(List.of("broken.nt", "notes.txt"), skippedNames);
+        assertTrue(summary.skipped().stream().allMatch(s -> !s.reason().isEmpty()));
+        // Both good files contribute their four IRIs, so the same IRIs appear twice before sorting.
+        assertEquals(8, readIris(summary.runs()).size());
+    }
+
+    @Test
+    void outputInsideTheInputDirectoryIsNotReadBack() throws IOException {
+        Path input = dir.resolve("input");
+        copySample("sample.nt", input);
+        Path ds = input.resolve("ds");
+
+        IriExtractor.ExtractionSummary first = new IriExtractor(ds).extract(input);
+        IriExtractor.ExtractionSummary second = new IriExtractor(ds).extract(input);
+
+        assertEquals(0, second.skipped().size(), second.skipped().toString());
+        assertEquals(1, second.files());
+        assertEquals(first.statements(), second.statements());
+        assertEquals(readIris(first.runs()), readIris(second.runs()));
+    }
+
+    @Test
+    void rerunReplacesThePreviousOutput() throws IOException {
+        Path input = dir.resolve("input");
+        copySample("sample.nt", input);
+        Path ds = dir.resolve("ds");
+
+        new IriExtractor(ds).extract(input);
+        Files.writeString(ds.resolve("runs").resolve("stale.parquet"), "left over");
+        IriExtractor.ExtractionSummary again = new IriExtractor(ds).extract(input);
+
+        assertFalse(Files.exists(ds.resolve("runs").resolve("stale.parquet")));
+        assertEquals(1, again.runs().size());
+    }
+
+    @Test
+    void directoryWithNoRdfGivesAnEmptyDataset() throws IOException {
+        Path input = dir.resolve("input");
+        Files.createDirectories(input);
+        Files.writeString(input.resolve("readme.md"), "# Not RDF\n");
+
+        IriExtractor.ExtractionSummary summary = new IriExtractor(dir.resolve("ds")).extract(input);
+
+        assertEquals(0, summary.files());
+        assertEquals(1, summary.skipped().size());
+        assertEquals(0, summary.runs().size());
+        assertEquals(0, summary.predicates());
+    }
+
+    @Test
+    void singleFileThatIsNotRdfIsAnError() throws IOException {
+        Path notRdf = dir.resolve("notes.txt");
+        Files.writeString(notRdf, "This is not RDF.\n");
+
+        assertThrows(RuntimeException.class, () -> new IriExtractor(dir.resolve("ds")).extract(notRdf));
+    }
+
     @Test
     void exactlyOneBatchOfTenThousandGivesOneRun() throws IOException {
         IriExtractor.ExtractionSummary summary = extractSelfLoops(10_000, IriExtractor.DEFAULT_BATCH_SIZE, "exact");

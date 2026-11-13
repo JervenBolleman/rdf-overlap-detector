@@ -64,15 +64,20 @@ java -jar target/rdf-overlap-detector-0.1.0-SNAPSHOT.jar <command> [arguments]
 
 | Command | Arguments | What it does |
 | --- | --- | --- |
-| `extract` | `<input> <datasetDir>` | Reads one RDF file and writes its IRIs as sorted run files under `<datasetDir>/runs/`, and its predicates under `<datasetDir>/predicates/`. |
+| `extract` | `<input> <datasetDir>` | Reads one RDF file, or every RDF file under a directory, and writes the IRIs as sorted run files under `<datasetDir>/runs/`, and the predicates under `<datasetDir>/predicates/`. |
 | `sort` | `<datasetDir>` | Merges the runs into `<datasetDir>/iris/iris.parquet`, sorted with no duplicates, then deletes `runs/`. |
 | `overlap` | `[--void-base=IRI] <outDir> <datasetDir> <datasetDir> [...]` | Compares every pair of sorted datasets and writes the results to `<outDir>`. |
 | `help` | | Prints the usage. |
 
 The name of a dataset is the name of its directory. Use names made only of letters, digits, `.`, `_` and `-`.
 
-Exit codes: `0` on success, `1` for a usage error, `3` when a step fails (for example, a parse error or a missing
-`runs/` directory).
+Exit codes: `0` on success, `1` for a usage error, `3` when a step fails (for example, a parse error on a single file
+or a missing `runs/` directory).
+
+When the input is a directory, every regular file below it is tried, in sorted order. A file that does not parse as
+RDF is skipped. Its name and the reason are printed to stderr as `skipped (not RDF): ...`, and extraction carries on.
+Files under the output directory are left out, so the dataset directory can sit inside the input directory. Every
+extraction replaces the output of the previous one.
 
 ### A complete example
 
@@ -107,6 +112,9 @@ Extract and sort each dataset once. After that you can compare any set of datase
   `rdf:about=""` work.
 - **Triples without IRIs:** blank nodes and literals are skipped. Named graph names are not collected.
   Predicates are kept in a separate file, not in the IRI set.
+
+A directory can mix RDF with other files, which are skipped as described above. A file that is RDF but broken is
+skipped too, so check the `skipped` lines in the output if a file you expected is missing.
 
 Malformed IRIs are counted as `rejectedIris` in the extract output and skipped. RDF4j rejects most malformed IRIs
 at parse time, so the count is usually zero.
