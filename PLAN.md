@@ -17,7 +17,7 @@ Choices made here, to review:
 
 - **Overlap definition.** The TODO asks for "IRI ranges" that appear in two datasets, but does not define the range. This plan defines a range as a run of sorted IRIs that share a prefix, where the prefix is `scheme://host/` plus a configurable number of leading path segments (default 2). Two datasets overlap on a range when both contain at least one IRI under the same prefix. Phase 6 also reports the exact shared IRI count per range.
 - **Storage layout.** One directory per dataset, with `iris/` (sorted, deduplicated IRIs), `predicates/` (deduplicated predicate IRIs), and `runs/` (temporary sorted batches, deleted after the merge).
-- **Project.** Maven, Java 21, a single module at first. Split into modules only if the CLI and library need separate release cycles.
+- **Project.** Maven, Java 25, a single module at first. Split into modules only if the CLI and library need separate release cycles.
 - **Versions.** Hardwood `1.1.0.Beta2` as the TODO says (`1.1.0.Beta3` also exists, so check the changelog before upgrading). RDF4j `6.2.0-M2`, the latest milestone, which satisfies "RDF4j 6+".
 
 ## Phase 0: Spikes (done)
@@ -67,7 +67,7 @@ Both spikes ran. The plan's decisions change in two places:
 
 Built as `pom.xml` with `src/main/java/org/example/rdfoverlap/Main.java`. The CLI dispatches `extract`, `sort` and `overlap`, and each reports "not implemented yet" with exit code 2. `SampleParsingTest` checks that 16 sample files (N-Triples, Turtle, RDF/XML and JSON-LD, each plain, gzip, xz and zstd) all parse to the same three statements through `RDFInputDispatcher`. `mvn test` passes with 21 tests. The group id is `swiss.sib`.
 
-- `pom.xml`: Java 21 release, RDF4j BOM, Hardwood, Commons Compress (if the fallback is chosen), JUnit 5, and the Maven compiler and surefire plugins.
+- `pom.xml`: Java 25 release, RDF4j BOM, Hardwood, Commons Compress (if the fallback is chosen), JUnit 5, and the Maven compiler and surefire plugins.
 - Package `swiss.sib.rdfoverlap` (rename to the real group id before the first commit).
 - A CLI entry point with subcommands `extract`, `sort`, and `overlap`, and a test resource directory with small RDF samples in each supported syntax (N-Triples, Turtle, RDF/XML, JSON-LD, each gzipped, xz-compressed, and zstd-compressed).
 

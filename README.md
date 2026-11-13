@@ -6,7 +6,7 @@ written as parquet files and as a [VoID](https://www.w3.org/TR/void/) descriptio
 
 ## Requirements
 
-- JDK 21 or newer, to build and run.
+- JDK 25, to build and run.
 - Maven 3.9 or newer, to build.
 
 ## Build
