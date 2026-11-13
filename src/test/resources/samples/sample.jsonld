@@ -1,0 +1,11 @@
+[
+  {
+    "@id": "http://example.org/s1",
+    "http://example.org/p": {"@id": "http://example.org/o1"},
+    "http://example.org/label": "one"
+  },
+  {
+    "@id": "http://example.org/s2",
+    "http://example.org/p": {"@id": "http://example.org/o2"}
+  }
+]
