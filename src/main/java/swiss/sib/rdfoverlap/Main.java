@@ -16,7 +16,7 @@ public final class Main {
             usage: rdf-overlap-detector <command> [args]
 
             commands:
-              extract   write the IRIs of one RDF file, or of a directory of RDF files, as sorted runs
+              extract   write the IRIs of RDF files as sorted runs; input is a file, a directory,\n                        an http(s) URL or a Metalink file (.meta4, .metalink)
               sort      merge extracted batches into one sorted, deduplicated IRI file per dataset
               overlap   report IRI ranges that appear in two or more datasets, as VoID in void.ttl
             """;
@@ -104,16 +104,16 @@ public final class Main {
         }
     }
 
-    /** extract &lt;input&gt; &lt;outDir&gt;: extracts one RDF file, or every RDF file under a directory. */
+    /** extract &lt;input&gt; &lt;outDir&gt;: extracts an RDF file, a directory, a URL or a Metalink file. */
     private static int extract(String[] args, PrintStream out, PrintStream err) {
         if (args.length != 3) {
-            err.println("usage: rdf-overlap-detector extract <input> <outDir>");
+            err.println("usage: rdf-overlap-detector extract <file|dir|url|metalink> <outDir>");
             return 1;
         }
         try {
-            IriExtractor.ExtractionSummary summary = new IriExtractor(Path.of(args[2])).extract(Path.of(args[1]));
+            IriExtractor.ExtractionSummary summary = new IriExtractor(Path.of(args[2])).extract(args[1]);
             for (IriExtractor.Skipped skip : summary.skipped()) {
-                err.println("skipped (not RDF): " + skip.file() + ": " + skip.reason());
+                err.println("skipped (not RDF): " + skip.source() + ": " + skip.reason());
             }
             out.printf("files=%d skipped=%d statements=%d runs=%d predicates=%d rejectedIris=%d%n",
                     summary.files(), summary.skipped().size(), summary.statements(), summary.runs().size(),

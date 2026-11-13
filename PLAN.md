@@ -234,3 +234,22 @@ output is one dataset.
 
 Covered by new `IriExtractorTest` cases (mixed RDF, non-RDF and broken files; subdirectories; output inside the
 input; re-running; a directory with no RDF; a single non-RDF file) and a CLI test on the sample directory. 118 tests pass.
+
+## Remote files and Metalink (added after directory input)
+
+`extract` also takes an http(s) URL and a Metalink file, local or remote. Metalink files are recognised by extension,
+`.meta4` for Metalink 4 (RFC 5854) and `.metalink` for Metalink 3.
+
+- A remote RDF file is streamed through the same parser. Nothing is saved to disk first.
+- Each Metalink entry lists its URLs and checksums. URLs are tried in priority order, so a mirror is used when the
+  first one fails. Relative URLs resolve against the Metalink file's own location.
+- MD5, SHA-1, SHA-256 and SHA-512 are verified over the bytes as served, so a compressed file is hashed compressed.
+  The digest is computed while the file streams. A mismatch is a skipped file with reason `checksum mismatch`, and
+  its partial runs are removed. Piece hashes in Metalink 4 are ignored, because they cover parts of a file.
+- Metalink XML is parsed with DOCTYPE and external entities refused.
+- Metalink and directory inputs are lenient, the same as directories. A single remote URL is strict, the same as a
+  single local file.
+
+Covered by `RemoteExtractionTest`, which serves files from a local HTTP server. It tests a single remote URL, a
+Metalink 4 file with checksums, mirror fallback, relative URLs, a checksum mismatch, a 404, a parse error, and a
+Metalink 3 file.

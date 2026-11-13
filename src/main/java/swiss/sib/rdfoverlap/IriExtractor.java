@@ -2,8 +2,10 @@ package swiss.sib.rdfoverlap;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -32,10 +34,12 @@ import org.eclipse.rdf4j.rio.helpers.RDFInputDispatcher;
  * <p>Predicate IRIs go into one set for the whole dataset, written once at the end as {@code <outDir>/predicates/
  * predicates.parquet}. Predicates repeat heavily, so a set that holds all of them stays small.
  *
- * <p>For a directory, every regular file below it is tried, in sorted order. Files under {@code outDir} are left
- * out, so a dataset directory can sit inside its input directory. A file that does not parse, such as a non-RDF
- * file, is skipped and recorded in {@link ExtractionSummary#skipped()}, and its partial output is removed. A
- * single file that does not parse is an error. A failure to write output is always an error.
+ * <p>The input is one of: a local RDF file, an http(s) URL of an RDF file, a directory, or a Metalink file (local or
+ * http(s)) that lists the files to read. A directory or a Metalink file is read file by file, in order. Files under
+ * {@code outDir} are left out of a directory, so a dataset directory can sit inside its input directory. A file that
+ * does not parse, or whose checksum does not match, is skipped and recorded in {@link ExtractionSummary#skipped()},
+ * and its partial output is removed. A single file that does not parse is an error. A failure to write output is
+ * always an error.
  *
  * <p>Every extraction replaces the output of the previous one, so {@code runs/} and {@code predicates/} are
  * rebuilt from scratch.
@@ -94,10 +98,10 @@ public final class IriExtractor {
     /**
      * A file that was not extracted.
      *
-     * @param file   the file
+     * @param source the file, as a path or URL
      * @param reason why it could not be read as RDF
      */
-    public record Skipped(Path file, String reason) {
+    public record Skipped(String source, String reason) {
     }
 
     /**
@@ -115,18 +119,48 @@ public final class IriExtractor {
     }
 
     /**
-     * Extracts an RDF file, or every file under a directory, into {@code outDir}.
+     * Extracts an RDF file, a directory of them, or the files listed in a Metalink file. The input may be a local path
+     * or an http(s) URL.
      *
-     * @param input an RDF file, in any format and compression that RDFInputDispatcher recognises, or a directory of
-     *              such files
+     * @param input a local path or an http(s) URL
      * @return counts, the run files written, and the files skipped
-     * @throws IOException if the input cannot be listed, a file cannot be written, or a single input file is not
-     *                     RDF
+     * @throws IOException if the input cannot be read, a file cannot be written, or a single input file is not RDF
+     */
+    public ExtractionSummary extract(String input) throws IOException {
+        if (RdfSources.isHttp(input)) {
+            URI uri = URI.create(input);
+            if (RdfSources.isMetalink(RdfSources.fileName(uri))) {
+                return run(RdfSources.readMetalink(uri), true);
+            }
+            return run(List.of(RdfSource.remote(uri)), false);
+        }
+        return extract(Path.of(input));
+    }
+
+    /**
+     * Extracts an RDF file, or every RDF file under a directory, or the files listed in a Metalink file.
+     *
+     * @param input a local RDF file, a directory, or a Metalink file
+     * @return counts, the run files written, and the files skipped
+     * @throws IOException if the input cannot be read, a file cannot be written, or a single input file is not RDF
      */
     public ExtractionSummary extract(Path input) throws IOException {
-        boolean directory = Files.isDirectory(input);
-        List<Path> files = directory ? listFiles(input) : List.of(input);
+        if (Files.isDirectory(input)) {
+            return run(localFiles(input), true);
+        }
+        if (RdfSources.isMetalink(input.getFileName().toString())) {
+            return run(RdfSources.readMetalink(input.toAbsolutePath().toUri()), true);
+        }
+        return run(List.of(RdfSource.local(input)), false);
+    }
 
+    /**
+     * Extracts the given sources in order.
+     *
+     * @param sources the files to read
+     * @param lenient true to skip a source that cannot be read as RDF, false to fail on it
+     */
+    private ExtractionSummary run(List<RdfSource> sources, boolean lenient) throws IOException {
         Path runsDir = outDir.resolve("runs");
         Path predicatesDir = outDir.resolve("predicates");
         deleteRecursively(runsDir);
@@ -141,11 +175,11 @@ public final class IriExtractor {
         long rejected = 0;
         int extracted = 0;
         int index = 0;
-        for (Path file : files) {
+        for (RdfSource source : sources) {
             index++;
             Collector collector = new Collector(String.format("f%06d-", index));
             try {
-                parse(file, collector);
+                parse(source, collector);
             } catch (IOException | RuntimeException e) {
                 if (collector.writeFailure != null) {
                     deleteRecursively(runsDir);
@@ -153,12 +187,12 @@ public final class IriExtractor {
                     throw collector.writeFailure;
                 }
                 deleteFiles(collector.runs);
-                if (!directory) {
+                if (!lenient) {
                     deleteRecursively(runsDir);
                     deleteRecursively(predicatesDir);
                     throw e;
                 }
-                skipped.add(new Skipped(file, reason(e)));
+                skipped.add(new Skipped(source.displayName(), reason(e)));
                 continue;
             }
             try {
@@ -179,28 +213,42 @@ public final class IriExtractor {
         return new ExtractionSummary(statements, runs, predicates.size(), rejected, extracted, skipped);
     }
 
-    /** Parses one file into the collector. Throws on input that is not RDF, and on read errors. */
-    private void parse(Path file, Collector collector) throws IOException {
-        // The file's own URI is the base, so same-document references such as rdf:about="" resolve.
-        String base = file.toAbsolutePath().toUri().toString();
-        try (InputStream in = Files.newInputStream(file)) {
-            new RDFInputDispatcher(parserConfig).dispatch(in, file.getFileName().toString(), null,
+    /**
+     * Parses one source into the collector. Opening, reading, parsing and checksum verification all happen here.
+     * Throws on input that is not RDF, on read errors, and on a checksum mismatch.
+     */
+    private void parse(RdfSource source, Collector collector) throws IOException {
+        RdfSources.Opened opened = RdfSources.open(source);
+        List<RdfSource.Checksum> checksums = source.checksums();
+        MessageDigest[] digests = RdfSources.digestsFor(checksums);
+        String name = RdfSources.fileName(opened.uri());
+        // The URI the file was read from is the base, so same-document references such as rdf:about="" resolve.
+        String base = opened.uri().toString();
+        try (InputStream raw = opened.stream()) {
+            InputStream in = checksums.isEmpty() ? raw : new RdfSources.DigestingInputStream(raw, digests);
+            new RDFInputDispatcher(parserConfig).dispatch(in, name, null,
                     (stream, sourceName, format) -> {
                         RDFParser parser = Rio.createParser(format, SimpleValueFactory.getInstance());
                         parser.setParserConfig(parserConfig);
                         parser.setRDFHandler(collector);
                         parser.parse(stream, base);
                     });
+            if (!checksums.isEmpty()) {
+                // The parser may stop before the end of the file, so read the rest before comparing digests.
+                RdfSources.drain(in);
+                RdfSources.verify(checksums, digests);
+            }
         }
     }
 
     /** The regular files under a directory, sorted, leaving out this extraction's own output. */
-    private List<Path> listFiles(Path dir) throws IOException {
+    private List<RdfSource> localFiles(Path dir) throws IOException {
         Path output = outDir.toAbsolutePath().normalize();
         try (Stream<Path> walk = Files.walk(dir)) {
             return walk.filter(Files::isRegularFile)
                     .filter(p -> !p.toAbsolutePath().normalize().startsWith(output))
                     .sorted()
+                    .map(RdfSource::local)
                     .toList();
         }
     }

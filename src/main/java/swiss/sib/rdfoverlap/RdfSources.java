@@ -1,0 +1,313 @@
+package swiss.sib.rdfoverlap;
+
+import java.io.ByteArrayInputStream;
+import java.io.FilterInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.SAXException;
+
+/**
+ * Opens RDF sources: local files, http(s) URLs and Metalink files.
+ *
+ * <p>Metalink files are recognised by name, {@code .meta4} for Metalink 4 (RFC 5854) and {@code .metalink} for
+ * Metalink 3. Both versions list files with their URLs and checksums, and both are read here.
+ */
+final class RdfSources {
+
+    private static final HttpClient CLIENT = HttpClient.newBuilder()
+            .followRedirects(HttpClient.Redirect.NORMAL)
+            .connectTimeout(Duration.ofSeconds(30))
+            .build();
+
+    /** Checksum types as written in Metalink files, mapped to MessageDigest names. */
+    private static final Map<String, String> ALGORITHMS = Map.of(
+            "md5", "MD5",
+            "sha1", "SHA-1",
+            "sha256", "SHA-256",
+            "sha512", "SHA-512");
+
+    private RdfSources() {
+    }
+
+    /** A stream that has been opened, and the URI it was opened from. */
+    record Opened(URI uri, InputStream stream) {
+    }
+
+    static boolean isHttp(String input) {
+        String lower = input.toLowerCase(Locale.ROOT);
+        return lower.startsWith("http://") || lower.startsWith("https://");
+    }
+
+    static boolean isMetalink(String name) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".meta4") || lower.endsWith(".metalink");
+    }
+
+    /** The last path segment of a URI, used to pick the decompression and format from the file name. */
+    static String fileName(URI uri) {
+        String path = uri.getPath();
+        if (path == null || path.isEmpty()) {
+            return uri.toString();
+        }
+        return path.substring(path.lastIndexOf('/') + 1);
+    }
+
+    /**
+     * Opens the first location of a source that can be read. Failures on earlier locations are reported only if
+     * none of them can be read.
+     */
+    static Opened open(RdfSource source) throws IOException {
+        if (source.uris().isEmpty()) {
+            throw new IOException("no location for " + source.displayName());
+        }
+        IOException last = null;
+        for (URI uri : source.uris()) {
+            try {
+                return new Opened(uri, openUri(uri));
+            } catch (IOException e) {
+                last = e;
+            }
+        }
+        throw last;
+    }
+
+    static InputStream openUri(URI uri) throws IOException {
+        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+        switch (scheme) {
+            case "file":
+                return Files.newInputStream(Path.of(uri));
+            case "http":
+            case "https":
+                HttpRequest request = HttpRequest.newBuilder(uri).GET().build();
+                HttpResponse<InputStream> response;
+                try {
+                    response = CLIENT.send(request, HttpResponse.BodyHandlers.ofInputStream());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("interrupted while fetching " + uri, e);
+                }
+                if (response.statusCode() != 200) {
+                    response.body().close();
+                    throw new IOException("HTTP " + response.statusCode() + " for " + uri);
+                }
+                return response.body();
+            default:
+                throw new IOException("unsupported URL scheme in " + uri);
+        }
+    }
+
+    /** Reads a Metalink file, local or remote, and lists its files as sources. */
+    static List<RdfSource> readMetalink(URI metalink) throws IOException {
+        byte[] xml;
+        try (InputStream in = openUri(metalink)) {
+            xml = in.readAllBytes();
+        }
+        return parseMetalink(xml, metalink);
+    }
+
+    /**
+     * Lists the files of a Metalink document. Relative URLs are resolved against {@code base}, and each file's URLs
+     * are ordered by their priority attribute, lowest first.
+     */
+    static List<RdfSource> parseMetalink(byte[] xml, URI base) throws IOException {
+        Element root = parseXml(xml);
+        if (!"metalink".equals(root.getLocalName() == null ? root.getTagName() : root.getLocalName())) {
+            throw new IOException("not a Metalink document: root element is " + root.getTagName());
+        }
+        List<RdfSource> sources = new ArrayList<>();
+        NodeList files = root.getElementsByTagNameNS("*", "file");
+        for (int i = 0; i < files.getLength(); i++) {
+            Element file = (Element) files.item(i);
+            String name = file.getAttribute("name");
+            List<Located> located = new ArrayList<>();
+            for (Element url : elements(file, "url")) {
+                located.add(new Located(resolve(base, url.getTextContent().trim()), priority(url)));
+            }
+            // Stable sort: URLs with equal priority keep their order in the document.
+            located.sort(java.util.Comparator.comparingInt(Located::priority));
+            List<URI> uris = located.stream().map(Located::uri).toList();
+            List<RdfSource.Checksum> checksums = new ArrayList<>();
+            for (Element hash : elements(file, "hash")) {
+                // Piece hashes in Metalink 4 carry a piece attribute and cover parts of the file, not all of it.
+                if (hash.hasAttribute("piece")) {
+                    continue;
+                }
+                String algorithm = ALGORITHMS.get(hash.getAttribute("type").replace("-", "").toLowerCase(Locale.ROOT));
+                if (algorithm != null) {
+                    checksums.add(new RdfSource.Checksum(algorithm, hash.getTextContent().trim().toLowerCase(Locale.ROOT)));
+                }
+            }
+            String displayName = !name.isEmpty() ? name : (uris.isEmpty() ? "file" : uris.get(0).toString());
+            sources.add(new RdfSource(displayName, List.copyOf(uris), List.copyOf(checksums)));
+        }
+        return sources;
+    }
+
+    private static Element parseXml(byte[] xml) throws IOException {
+        try {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(true);
+            // A Metalink file is data, not a document to expand. Refuse DTDs and external entities.
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            factory.setXIncludeAware(false);
+            factory.setExpandEntityReferences(false);
+            return factory.newDocumentBuilder().parse(new ByteArrayInputStream(xml)).getDocumentElement();
+        } catch (ParserConfigurationException | SAXException e) {
+            throw new IOException("cannot parse Metalink file: " + e.getMessage(), e);
+        }
+    }
+
+    /** Direct child elements with the given local name, in document order. */
+    private static List<Element> elements(Element parent, String localName) {
+        List<Element> found = new ArrayList<>();
+        NodeList nodes = parent.getElementsByTagNameNS("*", localName);
+        for (int i = 0; i < nodes.getLength(); i++) {
+            Node node = nodes.item(i);
+            if (node instanceof Element e) {
+                found.add(e);
+            }
+        }
+        return found;
+    }
+
+    private static URI resolve(URI base, String text) throws IOException {
+        URI uri;
+        try {
+            uri = base.resolve(new URI(text));
+        } catch (java.net.URISyntaxException e) {
+            throw new IOException("bad URL in Metalink file: " + text, e);
+        }
+        return uri;
+    }
+
+    /** A URL with the priority its url element gives it. */
+    private record Located(URI uri, int priority) {
+    }
+
+    /** The priority of a url element. Lower values are tried first, and a missing value comes last. */
+    private static int priority(Element url) {
+        String value = url.getAttribute("priority");
+        if (value.isEmpty()) {
+            return Integer.MAX_VALUE;
+        }
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            return Integer.MAX_VALUE;
+        }
+    }
+
+    /**
+     * Passes every byte through and feeds each digest. It is the only way the content is read, so each digest sees
+     * every byte exactly once, including bytes that a reader skips or pushes back.
+     */
+    static final class DigestingInputStream extends FilterInputStream {
+
+        private final MessageDigest[] digests;
+
+        DigestingInputStream(InputStream in, MessageDigest[] digests) {
+            super(in);
+            this.digests = digests;
+        }
+
+        @Override
+        public int read() throws IOException {
+            int b = super.read();
+            if (b >= 0) {
+                for (MessageDigest d : digests) {
+                    d.update((byte) b);
+                }
+            }
+            return b;
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws IOException {
+            int n = super.read(buffer, offset, length);
+            if (n > 0) {
+                for (MessageDigest d : digests) {
+                    d.update(buffer, offset, n);
+                }
+            }
+            return n;
+        }
+
+        @Override
+        public long skip(long n) throws IOException {
+            byte[] buffer = new byte[(int) Math.min(8192, Math.max(1, n))];
+            long skipped = 0;
+            while (skipped < n) {
+                int read = read(buffer, 0, (int) Math.min(buffer.length, n - skipped));
+                if (read < 0) {
+                    break;
+                }
+                skipped += read;
+            }
+            return skipped;
+        }
+
+        @Override
+        public boolean markSupported() {
+            return false;
+        }
+
+        @Override
+        public synchronized void mark(int readLimit) {
+        }
+
+        @Override
+        public synchronized void reset() throws IOException {
+            throw new IOException("mark and reset are not supported");
+        }
+    }
+
+    static MessageDigest[] digestsFor(List<RdfSource.Checksum> checksums) throws IOException {
+        MessageDigest[] digests = new MessageDigest[checksums.size()];
+        for (int i = 0; i < digests.length; i++) {
+            try {
+                digests[i] = MessageDigest.getInstance(checksums.get(i).algorithm());
+            } catch (NoSuchAlgorithmException e) {
+                throw new IOException("no digest algorithm " + checksums.get(i).algorithm(), e);
+            }
+        }
+        return digests;
+    }
+
+    /** Reads the rest of a stream into nowhere, so that a digest covers the whole file. */
+    static void drain(InputStream in) throws IOException {
+        in.transferTo(OutputStream.nullOutputStream());
+    }
+
+    /** Fails with a message if a digest does not match its expected value. */
+    static void verify(List<RdfSource.Checksum> checksums, MessageDigest[] digests) throws IOException {
+        for (int i = 0; i < checksums.size(); i++) {
+            String actual = HexFormat.of().formatHex(digests[i].digest());
+            if (!actual.equals(checksums.get(i).hex())) {
+                throw new IOException("checksum mismatch: " + checksums.get(i).algorithm() + " expected "
+                        + checksums.get(i).hex() + " but got " + actual);
+            }
+        }
+    }
+}

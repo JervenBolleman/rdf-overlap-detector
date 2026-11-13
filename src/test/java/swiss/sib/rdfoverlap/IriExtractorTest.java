@@ -108,7 +108,7 @@ class IriExtractorTest {
         assertEquals(6, summary.statements());
         assertEquals(2, summary.predicates());
         assertEquals(2, summary.skipped().size());
-        List<String> skippedNames = summary.skipped().stream().map(s -> s.file().getFileName().toString()).toList();
+        List<String> skippedNames = summary.skipped().stream().map(s -> Path.of(s.source()).getFileName().toString()).toList();
         assertEquals(List.of("broken.nt", "notes.txt"), skippedNames);
         assertTrue(summary.skipped().stream().allMatch(s -> !s.reason().isEmpty()));
         // Both good files contribute their four IRIs, so the same IRIs appear twice before sorting.

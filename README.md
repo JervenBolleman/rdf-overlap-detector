@@ -64,7 +64,7 @@ java -jar target/rdf-overlap-detector-0.1.0-SNAPSHOT.jar <command> [arguments]
 
 | Command | Arguments | What it does |
 | --- | --- | --- |
-| `extract` | `<input> <datasetDir>` | Reads one RDF file, or every RDF file under a directory, and writes the IRIs as sorted run files under `<datasetDir>/runs/`, and the predicates under `<datasetDir>/predicates/`. |
+| `extract` | `<input> <datasetDir>` | Reads RDF from a file, a directory, an http(s) URL or a Metalink file, and writes the IRIs as sorted run files under `<datasetDir>/runs/`, and the predicates under `<datasetDir>/predicates/`. |
 | `sort` | `<datasetDir>` | Merges the runs into `<datasetDir>/iris/iris.parquet`, sorted with no duplicates, then deletes `runs/`. |
 | `overlap` | `[--void-base=IRI] <outDir> <datasetDir> <datasetDir> [...]` | Compares every pair of sorted datasets and writes the results to `<outDir>`. |
 | `help` | | Prints the usage. |
@@ -76,6 +76,12 @@ or a missing `runs/` directory).
 
 When the input is a directory, every regular file below it is tried, in sorted order. A file that does not parse as
 RDF is skipped. Its name and the reason are printed to stderr as `skipped (not RDF): ...`, and extraction carries on.
+
+A Metalink file (`.meta4` for Metalink 4, `.metalink` for Metalink 3) lists the files to read, each with its URLs and
+checksums. It can be a local file or an http(s) URL. Relative URLs resolve against the Metalink file's own location.
+Each file tries its URLs in priority order, so a mirror is used when the first one fails. The MD5, SHA-1, SHA-256 and
+SHA-512 checksums are verified while the file streams through, and a file that does not match is skipped with the
+reason `checksum mismatch`. A file that cannot be downloaded is skipped with its HTTP status.
 Files under the output directory are left out, so the dataset directory can sit inside the input directory. Every
 extraction replaces the output of the previous one.
 
@@ -108,7 +114,9 @@ Extract and sort each dataset once. After that you can compare any set of datase
   extension can be followed by a compression suffix.
 - **Compression:** `.gz`, `.xz` or `.zst` on top of any of the syntaxes above, for example `rhea.rdf.gz`.
   Uncompressed files also work.
-- **Base IRI:** relative references are resolved against the file's own URI, so references such as
+- **Remote files:** an http(s) URL is streamed, not saved to disk first. The compression and the format come from
+  the last segment of the URL, so `https://example.org/dump.nt.gz` works.
+- **Base IRI:** relative references are resolved against the URI the file was read from, so references such as
   `rdf:about=""` work.
 - **Triples without IRIs:** blank nodes and literals are skipped. Named graph names are not collected.
   Predicates are kept in a separate file, not in the IRI set.
