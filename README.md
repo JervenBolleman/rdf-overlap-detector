@@ -52,6 +52,8 @@ run yet, and neither has the noexec fallback.
 Two GitHub Actions workflows live in `.github/workflows/`:
 
 - **`test`** runs `mvn verify` on Ubuntu for every pull request, on each push to the pull request.
+- **`native-check`** builds the native binary on arm64 Linux, and runs the release smoke test on it, for every pull
+  request and every push to `main`.
 - **`release`** is started by hand from the Actions tab, with a version such as `1.0.0`. It builds and tests the
   uber jar, and builds native binaries for Linux (x64), macOS (arm64 and x64) and Windows (x64), with a smoke test on each.
   It then creates the GitHub release `v<version>` with all of them attached. The version is set only in the
