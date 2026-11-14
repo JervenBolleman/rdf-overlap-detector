@@ -338,3 +338,15 @@ held every one open, which broke the open-file limit.
 - Merges combine the 16 smallest runs of a scope. A scope is one input file, or the shared pool. Smallest-first keeps
   the merged files of similar size, so the merges form levels of 16, but a level is not strictly enforced. A file's
   leftover runs that are fewer than 16 can join the shared pool and merge with runs of other levels.
+
+## Strict level-by-level tree
+
+- Runs are merged in a tree with fan-in 16. Level 0 holds runs. Whenever a level holds 16 files, exactly those 16 are
+  merged into one file at the next level. Every merge has the same shape.
+- Each input file has its own tree, so its merges run while it is parsed. A failed file's tree is deleted. On commit,
+  the file's remaining files move to the shared tree at the same levels.
+- At the end, the shared tree is merged bottom up. A level with one file moves up unchanged. A level with 2 to 15 files
+  is merged into one file at the level above. The last file is written to `iris/iris.parquet`.
+- This replaces the earlier smallest-first rule, which did not keep the levels strict.
+- Checked with 300,000 IRIs under an open-file limit of 768. The output holds the 600,000 distinct IRIs, and no run
+  files are left.

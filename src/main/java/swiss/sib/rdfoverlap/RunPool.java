@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,31 +19,32 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Merges the sorted run files of an extraction in the background, so that merging overlaps with parsing.
  *
- * <p>Runs are merged in a hierarchy. Whenever {@code fanIn} runs are waiting in one scope, the smallest {@code fanIn}
- * of them are merged into one larger run. That keeps the number of files small, and it keeps the number of open files
- * in any one merge at {@code fanIn}. Merges run on a pool of threads, so several can run at once. The scopes are:
+ * <p>The runs form a tree with a fixed fan-in. Level 0 holds runs. Whenever {@code fanIn} files wait at one level,
+ * exactly those {@code fanIn} files are merged into one file at the next level. Every merge therefore has the same
+ * shape, and the number of files open in one merge is fixed.
  *
+ * <p>There are two kinds of tree:
  * <ul>
- *   <li>Runs of one input file are merged among themselves, while the file is still being parsed. They stay in that
- *       file's scope, so a file that fails can be discarded without undoing any merge that other files depend on.</li>
- *   <li>When a file succeeds it is committed. Its runs move to the shared scope, which merges them the same way.</li>
+ *   <li>One tree per input file. Its runs are merged while the file is still being parsed. If the file fails, its tree
+ *       is deleted, and no other file's data has been merged into anything that is kept.</li>
+ *   <li>One shared tree. When a file succeeds, its tree's files move to the shared tree, at the same levels.</li>
  * </ul>
  *
- * <p>When extraction finishes, the shared scope is merged into one file, which is the dataset's sorted IRI file.
+ * <p>When extraction finishes, the shared tree is merged into one file, which is the dataset's sorted IRI file. Levels
+ * with fewer than {@code fanIn} files are merged as they are, because nothing else will arrive. A level with one file
+ * is moved up unchanged.
  *
  * <p>One coordinator thread owns all the state. It takes events in order: the caller's runs, commits, discards and
- * finish, and the completion of each merge. Merges themselves run on the pool, and touch only their own inputs and
- * their own output, so they need no locking. The number of threads defaults to one fewer than the cores, and to one
- * when there is a single core.
+ * finish, and the completion of each merge. Merges run on a thread pool, and each touches only its own inputs and
+ * output, so they need no locks. The number of merges in flight is capped by {@link #MAX_OPEN_FILES}.
  */
 final class RunPool {
 
     static final int DEFAULT_FAN_IN = 16;
 
     /**
-     * The hard limit on files open at once, for the whole extraction. The limit is kept by capping the number of merges
-     * in flight. A merge opens {@code fanIn} inputs and one output, and {@link #RESERVED_FILES} stay free for the
-     * input being parsed and for everything else the process holds.
+     * The hard limit on files open at once, for the whole extraction. A merge opens {@code fanIn} inputs and one output,
+     * and {@link #RESERVED_FILES} stay free for the input being parsed and for everything else the process holds.
      */
     static final int MAX_OPEN_FILES = 768;
     static final int RESERVED_FILES = 8;
@@ -60,12 +60,27 @@ final class RunPool {
         return cores > 1 ? cores - 1 : 1;
     }
 
-    /** The runs of one scope, and the merges of that scope that are in flight. Used only by the coordinator. */
-    private static final class Scope {
-        final List<Path> ready = new ArrayList<>();
+    /** A tree of files, by level, and the merges of it that are in flight. Used only by the coordinator. */
+    private static final class Tree {
+        final List<List<Path>> levels = new ArrayList<>();
         int inflight;
         boolean committed;
         boolean discarded;
+
+        List<Path> level(int level) {
+            while (levels.size() <= level) {
+                levels.add(new ArrayList<>());
+            }
+            return levels.get(level);
+        }
+
+        int files() {
+            int count = 0;
+            for (List<Path> level : levels) {
+                count += level.size();
+            }
+            return count;
+        }
     }
 
     private record Run(int file, Path path) {
@@ -83,7 +98,7 @@ final class RunPool {
     private record Abort() {
     }
 
-    private record MergeDone(Scope scope, Path output) {
+    private record MergeDone(Tree tree, int level, Path output) {
     }
 
     private record MergeFailed(Throwable cause) {
@@ -98,9 +113,9 @@ final class RunPool {
     private final CompletableFuture<Long> result = new CompletableFuture<>();
     private final Thread coordinator;
 
-    /** Scopes of files that have not yet committed or been discarded. Used only by the coordinator. */
-    private final Map<Integer, Scope> files = new HashMap<>();
-    private final Scope shared = new Scope();
+    /** Trees of files that have not yet committed or been discarded. Used only by the coordinator. */
+    private final Map<Integer, Tree> files = new HashMap<>();
+    private final Tree shared = new Tree();
     private final AtomicLong names = new AtomicLong();
     private int inflight;
     private boolean finishing;
@@ -137,18 +152,18 @@ final class RunPool {
         submit(new Run(file, path));
     }
 
-    /** Says that an input file parsed successfully, so its runs join the shared scope. */
+    /** Says that an input file parsed successfully, so its files join the shared tree. */
     void commit(int file) throws IOException {
         submit(new Commit(file));
     }
 
-    /** Says that an input file failed, so its runs are deleted once any merge of them has finished. */
+    /** Says that an input file failed, so its files are deleted once any merge of them has finished. */
     void discard(int file) throws IOException {
         submit(new Discard(file));
     }
 
     /**
-     * Merges the shared runs into the output, and returns the number of distinct IRIs in it.
+     * Merges the shared tree into the output, and returns the number of distinct IRIs in it.
      *
      * @throws IOException if a merge failed
      */
@@ -204,34 +219,34 @@ final class RunPool {
             while (true) {
                 Object event = events.take();
                 if (event instanceof Run run) {
-                    scopeOf(run.file()).ready.add(run.path());
+                    Tree tree = files.computeIfAbsent(run.file(), k -> new Tree());
+                    tree.level(0).add(run.path());
                     schedule(merges);
                 } else if (event instanceof Commit commit) {
-                    Scope scope = files.remove(commit.file());
-                    if (scope != null) {
-                        scope.committed = true;
-                        settle(scope);
+                    Tree tree = files.remove(commit.file());
+                    if (tree != null) {
+                        tree.committed = true;
+                        settle(tree);
                     }
                     schedule(merges);
                 } else if (event instanceof Discard discard) {
-                    Scope scope = files.remove(discard.file());
-                    if (scope != null) {
-                        scope.discarded = true;
-                        settle(scope);
+                    Tree tree = files.remove(discard.file());
+                    if (tree != null) {
+                        tree.discarded = true;
+                        settle(tree);
                     }
                 } else if (event instanceof MergeDone done) {
                     inflight--;
-                    done.scope().inflight--;
+                    done.tree().inflight--;
+                    done.tree().level(done.level() + 1).add(done.output());
                     if (aborting) {
-                        done.scope().ready.add(done.output());
                         if (inflight == 0) {
                             result.completeExceptionally(new IOException("extraction was aborted"));
                             return;
                         }
                         continue;
                     }
-                    done.scope().ready.add(done.output());
-                    settle(done.scope());
+                    settle(done.tree());
                     schedule(merges);
                 } else if (event instanceof MergeFailed failed) {
                     result.completeExceptionally(failed.cause());
@@ -262,92 +277,97 @@ final class RunPool {
         }
     }
 
-    private Scope scopeOf(int file) {
-        return files.computeIfAbsent(file, k -> new Scope());
-    }
-
     /**
-     * Acts on a scope whose merges have all finished. A committed scope hands its runs to the shared scope, and a
-     * discarded scope deletes them. Until then the scope waits, so that no file is deleted while a merge reads it.
+     * Acts on a tree whose merges have all finished. A committed tree moves its files to the shared tree, at the same
+     * levels. A discarded tree deletes its files. Until then the tree waits, so that no file is deleted while a merge
+     * reads it.
      */
-    private void settle(Scope scope) {
-        if (scope.inflight > 0) {
+    private void settle(Tree tree) {
+        if (tree.inflight > 0) {
             return;
         }
-        if (scope.discarded) {
-            deleteAll(scope.ready);
-            scope.ready.clear();
-        } else if (scope.committed && scope != shared) {
-            shared.ready.addAll(scope.ready);
-            scope.ready.clear();
+        if (tree.discarded) {
+            for (List<Path> level : tree.levels) {
+                deleteAll(level);
+                level.clear();
+            }
+        } else if (tree.committed) {
+            for (int l = 0; l < tree.levels.size(); l++) {
+                List<Path> level = tree.levels.get(l);
+                shared.level(l).addAll(level);
+                level.clear();
+            }
         }
     }
 
-    /** Starts merges while there are free threads and a scope has {@code fanIn} runs waiting. */
+    /** Starts merges of exactly {@code fanIn} files at a level, wherever a level holds that many, while threads are free. */
     private void schedule(ExecutorService merges) {
         if (aborting) {
             return;
         }
-        boolean started = true;
-        while (started && inflight < threads) {
-            started = false;
-            for (Scope scope : candidates()) {
-                if (scope.ready.size() >= fanIn && inflight < threads) {
-                    startMerge(scope, merges);
-                    started = true;
+        List<Tree> trees = new ArrayList<>(files.values());
+        trees.add(shared);
+        for (Tree tree : trees) {
+            for (int l = 0; l < tree.levels.size(); l++) {
+                while (tree.levels.get(l).size() >= fanIn && inflight < threads) {
+                    startMerge(tree, l, merges);
                 }
             }
         }
     }
 
-    private List<Scope> candidates() {
-        List<Scope> scopes = new ArrayList<>(files.values());
-        scopes.add(shared);
-        return scopes;
-    }
-
-    private void startMerge(Scope scope, ExecutorService merges) {
-        List<Path> inputs = smallest(scope.ready, fanIn);
-        scope.ready.removeAll(inputs);
-        scope.inflight++;
+    private void startMerge(Tree tree, int level, ExecutorService merges) {
+        List<Path> waiting = tree.levels.get(level);
+        List<Path> inputs = new ArrayList<>(waiting.subList(0, fanIn));
+        waiting.subList(0, fanIn).clear();
+        tree.inflight++;
         inflight++;
         Path combined = runsDir.resolve(String.format("merged-%06d.parquet", names.incrementAndGet()));
         merges.submit(() -> {
             try {
                 IriMerger.merge(inputs, combined, rowGroupRows);
                 deleteAll(inputs);
-                events.add(new MergeDone(scope, combined));
+                events.add(new MergeDone(tree, level, combined));
             } catch (Throwable t) {
                 events.add(new MergeFailed(t));
             }
         });
     }
 
-    /** Merges the shared runs into the output, once no merge is in flight. */
+    /**
+     * Merges the shared tree into the output, once no merge is in flight. Levels are merged bottom up. A level with a
+     * single file moves up unchanged, and a level with more is merged into one file at the level above. The last file
+     * is then written to the output.
+     */
     private long mergeShared() throws IOException {
         if (!files.isEmpty()) {
             throw new IllegalStateException("runs of files that were not committed or discarded: " + files.keySet());
         }
-        // Every scope with fanIn runs has been merged, so the shared runs are fewer than fanIn.
-        long rows = IriMerger.merge(shared.ready, output, rowGroupRows);
-        deleteAll(shared.ready);
-        shared.ready.clear();
+        while (shared.files() > 1) {
+            int l = 0;
+            while (shared.levels.get(l).isEmpty()) {
+                l++;
+            }
+            List<Path> level = shared.levels.get(l);
+            if (level.size() == 1) {
+                shared.level(l + 1).add(level.remove(0));
+            } else {
+                Path combined = runsDir.resolve(String.format("merged-%06d.parquet", names.incrementAndGet()));
+                IriMerger.merge(level, combined, rowGroupRows);
+                deleteAll(level);
+                level.clear();
+                shared.level(l + 1).add(combined);
+            }
+        }
+        List<Path> last = new ArrayList<>();
+        for (List<Path> level : shared.levels) {
+            last.addAll(level);
+            level.clear();
+        }
+        long rows = IriMerger.merge(last, output, rowGroupRows);
+        deleteAll(last);
         IriMerger.verify(output, rows);
         return rows;
-    }
-
-    private static List<Path> smallest(List<Path> files, int count) {
-        List<Path> sorted = new ArrayList<>(files);
-        sorted.sort(Comparator.comparingLong((Path p) -> sizeOrMax(p)).thenComparing(Path::toString));
-        return new ArrayList<>(sorted.subList(0, count));
-    }
-
-    private static long sizeOrMax(Path p) {
-        try {
-            return IriMerger.sizeOf(p);
-        } catch (IOException e) {
-            return Long.MAX_VALUE;
-        }
     }
 
     private static void deleteAll(List<Path> files) {

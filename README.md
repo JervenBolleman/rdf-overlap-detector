@@ -192,7 +192,7 @@ namespace you control to get resolvable IRIs.
 
 ## Running on large files
 
-- **Memory and open files:** extraction streams the data. Runs are merged 16 at a time, on background threads: one
+- **Memory and open files:** extraction streams the data. Runs are merged in a tree: exactly 16 files of one level are merged into one file of the next level. Merges run on background threads: one
   fewer than the CPU cores, or one on a single core. The extraction never has more than 768 files open. Each merge
   opens 17 files (16 runs and its output), so at most 44 merges run at once, whatever the core count. The overlap step keeps one entry per range per dataset in
   memory. Use `-Xmx` to set the heap size, for example `java -Xmx4g -jar ...`.
