@@ -191,19 +191,23 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          mvn -B -q -DgenerateBackupPoms=false org.codehaus.mojo:versions-maven-plugin:2.18.0:set -DnewVersion="$VERSION"
-          # The README's example jar names the release, so it is updated in the release commit.
-          python3 - <<'PY'
+          # The README\'s example jar names follow the version: the release commit names the release, and the
+          # next-snapshot commit names the snapshot, so main always names the jar it builds.
+          cat > "$RUNNER_TEMP/set-readme-version.py" <<'PY'
           import os, re
           version = os.environ["VERSION"]
           text = open("README.md", encoding="utf-8").read()
           text = re.sub(r"rdf-overlap-detector-[0-9][0-9A-Za-z.\-]*\.jar", f"rdf-overlap-detector-{version}.jar", text)
           open("README.md", "w", encoding="utf-8").write(text)
           PY
+
+          mvn -B -q -DgenerateBackupPoms=false org.codehaus.mojo:versions-maven-plugin:2.18.0:set -DnewVersion="$VERSION"
+          VERSION="$VERSION" python3 "$RUNNER_TEMP/set-readme-version.py"
           git commit -am "Release $VERSION"
           git tag -a "v$VERSION" -m "Release $VERSION"
 
           mvn -B -q -DgenerateBackupPoms=false org.codehaus.mojo:versions-maven-plugin:2.18.0:set -DnewVersion="$NEXT"
+          VERSION="$NEXT" python3 "$RUNNER_TEMP/set-readme-version.py"
           git commit -am "Prepare next development version $NEXT"
 
           # One atomic push, so a main that has moved on fails the whole release and nothing is half published.

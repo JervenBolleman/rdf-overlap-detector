@@ -58,9 +58,10 @@ Two GitHub Actions workflows live in `.github/workflows/`:
   uber jar, and builds native binaries for Linux (x64), macOS (arm64 and x64) and Windows (x64), with a smoke test on each.
   The version must be a semantic version (`MAJOR.MINOR.PATCH`, optionally with a pre-release such as `-rc.1`), must
   not be older than the pom's version, and must not already be tagged. The release then:
-  - commits the release version to the pom, and updates the jar names in this README to the release, and tags that
+  - commits the release version to the pom, updates the jar names in this README to the release, and tags that
     commit `v<version>`;
-  - commits the next patch snapshot to the pom on `main`, so `1.2.3` leaves `main` at `1.2.4-SNAPSHOT`;
+  - commits the next patch snapshot to the pom on `main`, so `1.2.3` leaves `main` at `1.2.4-SNAPSHOT`, and names
+    that snapshot in the README's jar names;
   - pushes the commits and the tag in one atomic push, so a `main` that has moved on fails the release cleanly;
   - creates the GitHub release `v<version>` with all the artifacts attached.
 
