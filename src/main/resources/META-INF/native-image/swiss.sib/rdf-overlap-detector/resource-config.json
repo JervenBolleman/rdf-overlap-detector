@@ -1,0 +1,7 @@
+{
+  "resources": {
+    "includes": [
+      {"pattern": "native/[a-z0-9_-]+/libzstd-jni\\.(so|dylib|dll)"}
+    ]
+  }
+}

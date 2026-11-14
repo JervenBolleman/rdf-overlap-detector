@@ -23,6 +23,7 @@ public final class IriParquetReader {
      * @throws IOException if the file cannot be read
      */
     public static long forEach(Path file, Consumer<IriRecord> consumer) throws IOException {
+        NativeCodecs.loadZstdIfNative();
         long count = 0;
         try (ParquetFileReader reader = ParquetFileReader.open(InputFile.of(file));
              RowReader rows = reader.rowReader()) {
@@ -43,6 +44,7 @@ public final class IriParquetReader {
      * @throws IOException if the file cannot be read
      */
     public static long rowCount(Path file) throws IOException {
+        NativeCodecs.loadZstdIfNative();
         try (ParquetFileReader reader = ParquetFileReader.open(InputFile.of(file))) {
             return reader.getFileMetaData().numRows();
         }
@@ -56,6 +58,7 @@ public final class IriParquetReader {
      * @throws IOException if the file cannot be read
      */
     public static int rowGroupCount(Path file) throws IOException {
+        NativeCodecs.loadZstdIfNative();
         try (ParquetFileReader reader = ParquetFileReader.open(InputFile.of(file))) {
             return reader.getFileMetaData().rowGroups().size();
         }

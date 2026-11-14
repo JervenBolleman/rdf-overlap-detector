@@ -229,8 +229,10 @@ public final class IriExtractor {
         // The URI the file was read from is the base, so same-document references such as rdf:about="" resolve.
         String base = opened.uri().toString();
         try (InputStream raw = opened.stream()) {
-            InputStream in = checksums.isEmpty() ? raw : new RdfSources.DigestingInputStream(raw, digests);
-            new RDFInputDispatcher(parserConfig).dispatch(in, name, null,
+            // The digest covers the bytes as served, so it sits below the decompression.
+            InputStream served = checksums.isEmpty() ? raw : new RdfSources.DigestingInputStream(raw, digests);
+            Compression.Decoded decoded = Compression.decodeAll(served, name);
+            new RDFInputDispatcher(parserConfig).dispatch(decoded.stream(), decoded.name(), null,
                     (stream, sourceName, format) -> {
                         RDFParser parser = Rio.createParser(format, SimpleValueFactory.getInstance());
                         parser.setParserConfig(parserConfig);
@@ -239,7 +241,7 @@ public final class IriExtractor {
                     });
             // The parser may stop before the end of the file. Read the rest, so the digests cover the whole file, and
             // so that an ssh command's failure is seen at the end of its output.
-            RdfSources.drain(in);
+            RdfSources.drain(served);
             RdfSources.verify(checksums, digests);
         }
     }

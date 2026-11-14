@@ -277,3 +277,21 @@ directory: files are sorted, and the files that are not RDF are skipped as they 
 names are read as NUL-separated output, so names with newlines work.
 
 Not done: paths relative to the home directory (for example `~/data`).
+
+## Native zstd (added after ssh listing)
+
+The native binary had silently skipped decompression. RDF4j finds zstd and xz by class name at run time, and a native
+image has no entry for those names, so compressed bytes went to the parser unchanged. The fix:
+
+- Gzip, xz and zstd are decoded by `Compression`, which calls the libraries directly.
+- zstd-jni's native library is copied into the image for each platform, under `native/<os>-<arch>/`, and loaded by
+  `NativeCodecs`. The loader runs before the first zstd use, which is in the parquet readers and writers and in the
+  zstd decoder. On the JVM it does nothing.
+- zstd-jni is pinned to 1.5.7-9, the JNI-only release. Version 1.5.7-25 calls the native library through the foreign
+  function API, which would need extra reachability metadata.
+- `-H:+AddAllCharsets` is needed, because the JSON-LD parser uses UTF-32LE. `--enable-native-access=ALL-UNNAMED` is
+  needed for the loader. `-march=compatibility` keeps the binary portable.
+
+Verified on Linux x86_64 with GraalVM 25: the sample directory extracts with `files=17`, and the zstd, xz and gzip
+inputs give three statements each. `sort` and `overlap` work on the output. The release smoke test covers the same
+steps on all four platforms, so the other platforms are checked when the workflow runs.

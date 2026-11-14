@@ -20,6 +20,7 @@ final class RunCursor implements Closeable {
     private IriRecord current;
 
     RunCursor(Path file) throws IOException {
+        NativeCodecs.loadZstdIfNative();
         this.reader = ParquetFileReader.open(InputFile.of(file));
         try {
             this.rows = reader.rowReader();

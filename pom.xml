@@ -16,7 +16,7 @@
     <rdf4j.version>6.2.0-M2</rdf4j.version>
     <hardwood.version>1.1.0.Beta2</hardwood.version>
     <junit.version>5.13.4</junit.version>
-    <zstd-jni.version>1.5.7-25</zstd-jni.version>
+    <zstd-jni.version>1.5.7-9</zstd-jni.version>
   </properties>
 
   <dependencyManagement>
@@ -197,12 +197,146 @@
       </plugin>
     </plugins>
   </build>
-  <!-- Opt-in GraalVM native image: mvn -Pnative package. Needs GraalVM 25 as GRAALVM_HOME and a C toolchain. -->
+  <!-- Platform properties for the native build. zstd-jni ships its native library for each platform in its jar, and
+       the native build copies the one for this platform into the image under native/<os>-<arch>/. -->
   <profiles>
+    <profile>
+      <id>os-linux</id>
+      <activation>
+        <os><family>unix</family><name>Linux</name></os>
+      </activation>
+      <properties>
+        <dist.os>linux</dist.os>
+        <dist.lib.extension>*.so</dist.lib.extension>
+        <zstd.os.dir>linux</zstd.os.dir>
+      </properties>
+    </profile>
+    <profile>
+      <id>os-mac</id>
+      <activation>
+        <os><family>mac</family></os>
+      </activation>
+      <properties>
+        <dist.os>macos</dist.os>
+        <dist.lib.extension>*.dylib</dist.lib.extension>
+        <zstd.os.dir>darwin</zstd.os.dir>
+      </properties>
+    </profile>
+    <profile>
+      <id>os-windows</id>
+      <activation>
+        <os><family>windows</family></os>
+      </activation>
+      <properties>
+        <dist.os>windows</dist.os>
+        <dist.lib.extension>*.dll</dist.lib.extension>
+        <zstd.os.dir>win</zstd.os.dir>
+      </properties>
+    </profile>
+    <profile>
+      <id>arch-aarch64</id>
+      <activation>
+        <os><arch>aarch64</arch></os>
+      </activation>
+      <properties>
+        <dist.arch>aarch64</dist.arch>
+        <zstd.arch.dir>aarch64</zstd.arch.dir>
+      </properties>
+    </profile>
+    <profile>
+      <id>arch-amd64</id>
+      <activation>
+        <os><arch>amd64</arch></os>
+      </activation>
+      <properties>
+        <dist.arch>x86_64</dist.arch>
+        <zstd.arch.dir>amd64</zstd.arch.dir>
+      </properties>
+    </profile>
+    <profile>
+      <id>arch-x86_64</id>
+      <activation>
+        <os><arch>x86_64</arch></os>
+      </activation>
+      <properties>
+        <dist.arch>x86_64</dist.arch>
+        <zstd.arch.dir>x86_64</zstd.arch.dir>
+      </properties>
+    </profile>
+
+    <!-- Opt-in GraalVM native image: mvn -Pnative package. Needs GraalVM 25 as GRAALVM_HOME and a C toolchain. -->
     <profile>
       <id>native</id>
       <build>
         <plugins>
+          <!-- Unpack zstd-jni, to find its native library for this platform. -->
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-dependency-plugin</artifactId>
+            <version>3.8.1</version>
+            <executions>
+              <execution>
+                <id>unpack-zstd-native</id>
+                <phase>generate-resources</phase>
+                <goals>
+                  <goal>unpack</goal>
+                </goals>
+                <configuration>
+                  <artifactItems>
+                    <artifactItem>
+                      <groupId>com.github.luben</groupId>
+                      <artifactId>zstd-jni</artifactId>
+                      <version>${zstd-jni.version}</version>
+                      <type>jar</type>
+                      <overWrite>true</overWrite>
+                      <outputDirectory>${project.build.directory}/zstd-native</outputDirectory>
+                    </artifactItem>
+                  </artifactItems>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+
+          <!-- Copy this platform's zstd-jni library into the image as native/<os>-<arch>/libzstd-jni.<ext>. The
+               loader in NativeCodecs finds it there, because the native build cannot load it from the jar. -->
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-antrun-plugin</artifactId>
+            <version>3.1.0</version>
+            <executions>
+              <execution>
+                <id>stage-zstd-native</id>
+                <phase>process-resources</phase>
+                <goals>
+                  <goal>run</goal>
+                </goals>
+                <configuration>
+                  <target>
+                    <property name="native.resource.dir"
+                              value="${project.build.outputDirectory}/native/${dist.os}-${dist.arch}"/>
+                    <mkdir dir="${native.resource.dir}"/>
+                    <copy todir="${native.resource.dir}">
+                      <fileset dir="${project.build.directory}/zstd-native/${zstd.os.dir}/${zstd.arch.dir}"
+                               includes="${dist.lib.extension}"/>
+                      <firstmatchmapper>
+                        <regexpmapper from="^(?:lib)?zstd-jni[^/\\]*\.(so|dylib|dll)$" to="libzstd-jni.\1"/>
+                      </firstmatchmapper>
+                    </copy>
+                    <fail message="Expected one zstd-jni native library in ${native.resource.dir}">
+                      <condition>
+                        <not>
+                          <resourcecount count="1">
+                            <fileset dir="${native.resource.dir}" includes="libzstd-jni.*"/>
+                          </resourcecount>
+                        </not>
+                      </condition>
+                    </fail>
+                  </target>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+
           <plugin>
             <groupId>org.graalvm.buildtools</groupId>
             <artifactId>native-maven-plugin</artifactId>
@@ -220,6 +354,12 @@
               <imageName>rdf-overlap-detector</imageName>
               <mainClass>swiss.sib.rdfoverlap.Main</mainClass>
               <buildArgs>
+                <!-- A portable instruction set, so the release binaries run on machines other than the build host. -->
+                <buildArg>-march=compatibility</buildArg>
+                <!-- The zstd loader calls System.load, which needs native access enabled at run time. -->
+                <buildArg>--enable-native-access=ALL-UNNAMED</buildArg>
+                <!-- JSON-LD parsing needs charsets, such as UTF-32LE, that a native image leaves out by default. -->
+                <buildArg>-H:+AddAllCharsets</buildArg>
                 <buildArg>--no-fallback</buildArg>
                 <buildArg>-H:+ReportExceptionStackTraces</buildArg>
               </buildArgs>

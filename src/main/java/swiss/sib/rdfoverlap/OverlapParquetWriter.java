@@ -35,6 +35,7 @@ public final class OverlapParquetWriter implements Closeable {
     private final RowWriter rows;
 
     public OverlapParquetWriter(Path file) throws IOException {
+        NativeCodecs.loadZstdIfNative();
         this.writer = ParquetFileWriter.create(OutputFile.of(file), FILE_SCHEMA, WriterConfig.defaults());
         this.rows = writer.rowWriter();
     }

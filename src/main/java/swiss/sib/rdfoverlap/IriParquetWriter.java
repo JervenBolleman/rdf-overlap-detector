@@ -25,6 +25,7 @@ public final class IriParquetWriter implements Closeable {
     }
 
     IriParquetWriter(Path file, WriterConfig config) throws IOException {
+        NativeCodecs.loadZstdIfNative();
         this.writer = ParquetFileWriter.create(OutputFile.of(file), IriSchema.FILE_SCHEMA, config);
         this.rows = writer.rowWriter();
     }

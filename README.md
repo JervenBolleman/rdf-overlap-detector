@@ -21,7 +21,7 @@ drops dependency signatures and per-jar `module-info` descriptors, which would b
 
 Run the tests with `mvn test`.
 
-## Native image (experimental)
+## Native image
 
 A GraalVM native executable starts without a JVM. It is an opt-in Maven profile, so `mvn package` is unchanged.
 
@@ -29,20 +29,23 @@ A GraalVM native executable starts without a JVM. It is an opt-in Maven profile,
 export GRAALVM_HOME=/path/to/graalvm-25
 $GRAALVM_HOME/bin/gu install native-image   # only if native-image is not already installed
 mvn -Pnative package
-target/rdf-overlap-detector  help
+target/rdf-overlap-detector help
 ```
 
 Requirements:
 
-- GraalVM for JDK 25, with `native-image`. The native build is run and tested on GraalVM 25.
+- GraalVM 25, with `native-image`.
 - A C toolchain such as `gcc`.
-- A writable `/tmp`. The `native-image` launcher writes its argument files there and ignores `TMPDIR`, `TMP` and
-  `TEMP`.
 - Network access during the build. The profile fetches GraalVM reachability metadata for libraries that need it.
 
-Status: the native build works on GraalVM 25 when run locally. The `release` workflow's native jobs have not run yet,
-because the repository is not on GitHub. Any `.zst` input that fails in a native binary is worth reporting with the
-build log and the stack trace.
+zstd-jni's native library is copied into the image for each platform, and `NativeCodecs` loads it at run time. The
+loader extracts it to the temp directory, or to `~/.rdf-overlap-detector/native` if the temp directory is noexec, and
+then loads it. Gzip, xz and zstd input are decompressed by the libraries directly, not by reflection, so a native image
+includes them.
+
+Status: built and run on Linux x86_64 with GraalVM 25. The sample directory extracts, including the zstd, xz and gzip
+samples, and `sort` and `overlap` work on the output. The release workflow's macOS and Windows builds have not been
+run yet, and neither has the noexec fallback.
 
 ## Continuous integration and releases
 
