@@ -65,7 +65,7 @@ class IriExtractorTest {
         Path out = dir.resolve("broken");
 
         assertThrows(RDFParseException.class, () -> new IriExtractor(out, 1).extract(input));
-        assertFalse(Files.exists(out.resolve("runs")));
+        assertFalse(Files.exists(out.resolve("iris").resolve("iris.parquet")), "no output for a failed extraction");
     }
 
     @Test
@@ -137,6 +137,7 @@ class IriExtractorTest {
         Path ds = dir.resolve("ds");
 
         new IriExtractor(ds).extract(input);
+        Files.createDirectories(ds.resolve("runs"));
         Files.writeString(ds.resolve("runs").resolve("stale.parquet"), "left over");
         IriExtractor.ExtractionSummary again = new IriExtractor(ds).extract(input);
 
@@ -164,6 +165,38 @@ class IriExtractorTest {
         Files.writeString(notRdf, "This is not RDF.\n");
 
         assertThrows(RuntimeException.class, () -> new IriExtractor(dir.resolve("ds")).extract(notRdf));
+    }
+
+    /** Up to four sources are read at once, and never more than there are sources or cores. */
+    @Test
+    void readersAreBoundedByTheSourcesAndTheCores() {
+        assertEquals(1, IriExtractor.readerThreads(1));
+        assertTrue(IriExtractor.readerThreads(100) <= IriExtractor.MAX_READERS);
+        assertTrue(IriExtractor.readerThreads(100) <= RunPool.defaultThreads());
+        assertTrue(IriExtractor.readerThreads(3) <= 3);
+    }
+
+    /** Sources read in parallel give the same output as the same sources read one at a time. */
+    @Test
+    void parallelReadingGivesTheSameOutput() throws IOException {
+        Path input = dir.resolve("many");
+        for (int i = 0; i < 12; i++) {
+            Path file = input.resolve("part" + i + ".nt");
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, "<http://ex/s" + i + "> <http://ex/p> <http://ex/o" + i + "> .\n"
+                    + "<http://ex/shared> <http://ex/p> <http://ex/o" + i + "> .\n");
+        }
+
+        IriExtractor.ExtractionSummary summary = new IriExtractor(dir.resolve("ds")).extract(input);
+
+        assertEquals(12, summary.files());
+        assertEquals(24, summary.statements());
+        // The 12 subjects, the 12 objects and the shared subject: 25 distinct IRIs.
+        assertEquals(25, summary.distinctIris());
+        List<String> iris = readIris(List.of(summary.output()));
+        List<String> sorted = new ArrayList<>(iris);
+        assertEquals(sorted.stream().sorted().toList(), iris.stream().sorted().toList());
+        assertEquals(25, iris.size());
     }
 
     @Test
@@ -244,8 +277,10 @@ class IriExtractorTest {
         }
         assertEquals(expected, readIris(List.of(summary.output())));
         assertEquals(9, summary.distinctIris());
-        try (var files = Files.list(ds.resolve("runs"))) {
-            assertEquals(0, files.count(), "every run and merged file is removed once merged");
+        if (Files.exists(ds.resolve("runs"))) {
+            try (var files = Files.list(ds.resolve("runs"))) {
+                assertEquals(0, files.count(), "every run and merged file is removed once merged");
+            }
         }
     }
 

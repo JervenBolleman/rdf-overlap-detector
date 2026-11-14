@@ -350,3 +350,19 @@ held every one open, which broke the open-file limit.
 - This replaces the earlier smallest-first rule, which did not keep the levels strict.
 - Checked with 300,000 IRIs under an open-file limit of 768. The output holds the 600,000 distinct IRIs, and no run
   files are left.
+
+## Resuming an unfinished extraction
+
+- A file is recorded in `state/manifest.txt` only after its runs are in the shared tree. The manifest also lists the
+  shared tree's files by level, and the file of each completed file's predicates.
+- The manifest is replaced atomically. A merge's output is recorded before its inputs are deleted, so the manifest never
+  names a missing file.
+- On `--resume`, completed files are restored from the manifest and their predicates are read back. Any run or predicate
+  file the manifest does not name is an orphan, and is deleted. A file the manifest names but that is missing is an error,
+  which names the file.
+- Run and predicate files are named by a hash of the input's identity, so a resumed listing cannot collide with an
+  earlier file's runs. The identity of a local file is its path, size and modification time. A file listed twice, with
+  the same identity and the same checksums, is read once.
+- A run that fails keeps its state. Only `iris/iris.parquet` is absent until the extraction finishes.
+- Checked by killing a 400-file extraction mid-run: the resume gives the full result, 4,000,000 statements and 8,000,000
+  distinct IRIs, and leaves no state or run files.

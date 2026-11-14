@@ -76,11 +76,18 @@ java -jar target/rdf-overlap-detector-0.1.0-SNAPSHOT.jar <command> [arguments]
 
 | Command | Arguments | What it does |
 | --- | --- | --- |
-| `extract` | `<input> <datasetDir>` | Reads RDF from a file, a directory, an http(s) or ssh URL, or a Metalink file, and writes one sorted, deduplicated IRI file to `<datasetDir>/iris/iris.parquet`. Runs are merged in the background while extraction continues. |
+| `extract` | `[--resume] <input> <datasetDir>` | Reads RDF from a file, a directory, an http(s) or ssh URL, or a Metalink file, and writes one sorted, deduplicated IRI file to `<datasetDir>/iris/iris.parquet`. Runs are merged in the background while extraction continues. |
 | `overlap` | `[--void-base=IRI] <outDir> <datasetDir> <datasetDir> [...]` | Compares every pair of sorted datasets and writes the results to `<outDir>`. |
 | `help` | | Prints the usage. |
 
 The name of a dataset is the name of its directory. Use names made only of letters, digits, `.`, `_` and `-`.
+
+`--resume` continues an extraction that did not finish. The extraction records each file once it has been read
+completely, in `<datasetDir>/state/`, together with the merged runs. A resumed run skips those files and reads the rest.
+A file is identified by its path, size and modification time, or by its URL for a remote file, so a changed local file
+is read again. A remote file cannot be checked for change, so it is trusted if its URL is the same. The state is removed
+when the extraction finishes. A run that fails keeps its state, so it can be resumed. Only the output is absent until
+the extraction finishes, so the partial dataset is never read as complete.
 
 Exit codes: `0` on success, `1` for a usage error, `3` when a step fails (for example, a parse error on a single file
 or a failed merge).

@@ -17,7 +17,8 @@ public final class Main {
 
             commands:
               extract   read RDF files and write one sorted, deduplicated IRI file for the dataset; input is a
-                        file, a directory, an http(s) URL, an ssh URL or a Metalink file (.meta4, .metalink)
+                        file, a directory, an http(s) URL, an ssh URL or a Metalink file (.meta4, .metalink).
+                        With --resume, continue an extraction that did not finish
               overlap   report IRI ranges that appear in two or more datasets, as VoID in void.ttl
             """;
 
@@ -88,12 +89,15 @@ public final class Main {
 
     /** extract &lt;input&gt; &lt;outDir&gt;: extracts an RDF file, a directory, a URL or a Metalink file. */
     private static int extract(String[] args, PrintStream out, PrintStream err) {
-        if (args.length != 3) {
-            err.println("usage: rdf-overlap-detector extract <file|dir|url|metalink> <outDir>");
+        boolean resume = args.length > 1 && args[1].equals("--resume");
+        int first = resume ? 2 : 1;
+        if (args.length - first != 2) {
+            err.println("usage: rdf-overlap-detector extract [--resume] <file|dir|url|metalink> <outDir>");
             return 1;
         }
         try {
-            IriExtractor.ExtractionSummary summary = new IriExtractor(Path.of(args[2])).extract(args[1]);
+            IriExtractor.ExtractionSummary summary =
+                    new IriExtractor(Path.of(args[first + 1])).extract(args[first], resume);
             for (IriExtractor.Skipped skip : summary.skipped()) {
                 err.println("skipped (not RDF): " + skip.source() + ": " + skip.reason());
             }

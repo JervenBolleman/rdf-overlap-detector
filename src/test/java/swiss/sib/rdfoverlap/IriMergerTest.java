@@ -37,6 +37,11 @@ class IriMergerTest {
         return iris;
     }
 
+    /** A completion record for a test file, which the pool keeps only when it has a state to save to. */
+    private static ManifestStore.CompletedFile done(int file) {
+        return new ManifestStore.CompletedFile("file-" + file, 0, 0, 0, "pred-" + file + ".parquet");
+    }
+
     private static int filesIn(Path dir) throws IOException {
         if (!Files.exists(dir)) {
             return 0;
@@ -84,10 +89,10 @@ class IriMergerTest {
         pool.run(1, run(runs.resolve("f1-1.parquet"), "http://ex/a"));
         pool.run(1, run(runs.resolve("f1-2.parquet"), "http://ex/c"));
         pool.run(1, run(runs.resolve("f1-3.parquet"), "http://ex/e"));
-        pool.commit(1);
+        pool.commit(1, done(1));
         pool.run(2, run(runs.resolve("f2-1.parquet"), "http://ex/b", "http://ex/e"));
         pool.run(2, run(runs.resolve("f2-2.parquet"), "http://ex/d"));
-        pool.commit(2);
+        pool.commit(2, done(2));
 
         long distinct = pool.finish();
 
@@ -111,7 +116,7 @@ class IriMergerTest {
                     pool.run(file, run(runs.resolve("f" + file + "-" + run + ".parquet"), iri, "http://ex/shared"));
                     expected.add(iri);
                 }
-                pool.commit(file);
+                pool.commit(file, done(file));
             }
             expected.add("http://ex/shared");
             expected.sort(null);
@@ -151,7 +156,7 @@ class IriMergerTest {
         pool.run(1, run(runs.resolve("f1-2.parquet"), "http://ex/also-in-failed-file"));
         pool.discard(1);
         pool.run(2, run(runs.resolve("f2-1.parquet"), "http://ex/kept"));
-        pool.commit(2);
+        pool.commit(2, done(2));
 
         assertEquals(1, pool.finish());
         assertEquals(List.of("http://ex/kept"), readIris(out));

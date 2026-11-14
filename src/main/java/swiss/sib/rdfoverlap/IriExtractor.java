@@ -9,10 +9,22 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.Statement;
@@ -54,6 +66,15 @@ public final class IriExtractor {
 
     public static final int DEFAULT_BATCH_SIZE = 10_000;
 
+    /** At most this many sources are read at once. */
+    static final int MAX_READERS = 4;
+
+    /** Makes the next extraction fail after {@code files} sources. For the tests of resuming. */
+    IriExtractor failAfter(int files) {
+        this.failAfterFiles = files;
+        return this;
+    }
+
     /** Rows per row group in the output. A merge holds one row group in memory at a time. */
     static final int ROW_GROUP_ROWS = 1_000_000;
 
@@ -79,6 +100,9 @@ public final class IriExtractor {
     private static final long MAX_EXPANSION_RATIO = 200L;
 
     private final Path outDir;
+
+    /** For the tests: fail once this many sources have been combined, to simulate an interrupted extraction. */
+    private int failAfterFiles = -1;
     private final int batchSize;
     private final ParserConfig parserConfig;
     private final int fanIn;
@@ -140,18 +164,31 @@ public final class IriExtractor {
      * @throws IOException if the input cannot be read, a file cannot be written, or a single input file is not RDF
      */
     public ExtractionSummary extract(String input) throws IOException {
+        return extract(input, false);
+    }
+
+    /**
+     * Extracts an input, and with {@code resume} continues an earlier extraction of the same input that did not finish.
+     * Files that were read completely before are not read again.
+     *
+     * @param input  a local path or an http(s) or ssh URL
+     * @param resume true to continue an unfinished extraction, false to start afresh
+     * @return counts, the output file, and the files skipped
+     * @throws IOException if the input cannot be read, the saved state cannot be used, or a file cannot be written
+     */
+    public ExtractionSummary extract(String input, boolean resume) throws IOException {
         if (RdfSources.isRemote(input)) {
             URI uri = URI.create(input);
             if (RdfSources.isMetalink(RdfSources.fileName(uri))) {
-                return run(RdfSources.readMetalink(uri), true);
+                return run(RdfSources.readMetalink(uri), true, resume);
             }
             if (RdfSources.isSsh(input)) {
                 RdfSources.Listing listing = RdfSources.listSsh(uri);
-                return run(listing.sources(), listing.directory());
+                return run(listing.sources(), listing.directory(), resume);
             }
-            return run(List.of(RdfSource.remote(uri)), false);
+            return run(List.of(RdfSource.remote(uri)), false, resume);
         }
-        return extract(Path.of(input));
+        return extract(Path.of(input), resume);
     }
 
     /**
@@ -162,13 +199,18 @@ public final class IriExtractor {
      * @throws IOException if the input cannot be read, a file cannot be written, or a single input file is not RDF
      */
     public ExtractionSummary extract(Path input) throws IOException {
+        return extract(input, false);
+    }
+
+    /** As {@link #extract(String, boolean)}, for a local path. */
+    public ExtractionSummary extract(Path input, boolean resume) throws IOException {
         if (Files.isDirectory(input)) {
-            return run(localFiles(input), true);
+            return run(localFiles(input), true, resume);
         }
         if (RdfSources.isMetalink(input.getFileName().toString())) {
-            return run(RdfSources.readMetalink(input.toAbsolutePath().toUri()), true);
+            return run(RdfSources.readMetalink(input.toAbsolutePath().toUri()), true, resume);
         }
-        return run(List.of(RdfSource.local(input)), false);
+        return run(List.of(RdfSource.local(input)), false, resume);
     }
 
     /**
@@ -177,65 +219,263 @@ public final class IriExtractor {
      * @param sources the files to read
      * @param lenient true to skip a source that cannot be read as RDF, false to fail on it
      */
-    private ExtractionSummary run(List<RdfSource> sources, boolean lenient) throws IOException {
+    private ExtractionSummary run(List<RdfSource> sources, boolean lenient, boolean resume) throws IOException {
         Path runsDir = outDir.resolve("runs");
         Path predicatesDir = outDir.resolve("predicates");
         Path irisDir = outDir.resolve("iris");
+        Path stateDir = outDir.resolve("state");
         Path output = irisDir.resolve("iris.parquet");
-        deleteRecursively(runsDir);
-        deleteRecursively(predicatesDir);
-        deleteRecursively(irisDir);
-        Files.createDirectories(runsDir);
-        Files.createDirectories(predicatesDir);
-        Files.createDirectories(irisDir);
+        ManifestStore store = new ManifestStore(stateDir);
+        ManifestStore.Manifest initial = resume ? store.load() : ManifestStore.Manifest.empty();
+        if (!resume) {
+            for (Path dir : List.of(runsDir, predicatesDir, irisDir, stateDir)) {
+                deleteRecursively(dir);
+            }
+        }
+        for (Path dir : List.of(runsDir, predicatesDir, irisDir, stateDir)) {
+            Files.createDirectories(dir);
+        }
+        if (resume) {
+            removeUnreferenced(initial, runsDir, stateDir);
+        }
+        // A file listed twice is read once. Its key is its identity, so its run files have one name each.
+        Map<String, RdfSource> unique = new LinkedHashMap<>();
+        for (RdfSource source : sources) {
+            unique.putIfAbsent(keyOrName(source), source);
+        }
+        List<Map.Entry<String, RdfSource>> inputs = new ArrayList<>(unique.entrySet());
+        Map<String, ManifestStore.CompletedFile> done = new HashMap<>();
+        for (ManifestStore.CompletedFile c : initial.completed()) {
+            done.put(c.key(), c);
+        }
 
-        RunPool pool = new RunPool(runsDir, output, fanIn, ROW_GROUP_ROWS);
+        RunPool pool = new RunPool(runsDir, output, fanIn, ROW_GROUP_ROWS, RunPool.defaultThreads(), store, initial);
+        ExecutorService readers = Executors.newFixedThreadPool(readerThreads(sources.size()), runnable -> {
+            Thread thread = new Thread(runnable, "iri-reader");
+            thread.setDaemon(true);
+            return thread;
+        });
         Set<IriParts> predicates = new TreeSet<>();
         List<Skipped> skipped = new ArrayList<>();
         long statements = 0;
         long rejected = 0;
         long batches = 0;
         int extracted = 0;
-        int index = 0;
         try {
-            for (RdfSource source : sources) {
-                index++;
-                Collector collector = new Collector(index, pool, runsDir);
+            // Sources are read in parallel, but their results are combined in source order, so the output does not
+            // depend on which file finishes first.
+            List<Future<FileResult>> results = new ArrayList<>();
+            for (int i = 0; i < inputs.size(); i++) {
+                String key = inputs.get(i).getKey();
+                RdfSource source = inputs.get(i).getValue();
+                int index = i;
+                results.add(readers.submit(() -> read(source, key, index, lenient, pool, runsDir, stateDir, done)));
+            }
+            for (int i = 0; i < results.size(); i++) {
+                if (i == failAfterFiles) {
+                    throw new IllegalStateException("simulated failure after " + i + " files");
+                }
+                FileResult result;
                 try {
-                    parse(source, collector);
-                } catch (IOException | RuntimeException e) {
-                    if (collector.writeFailure != null) {
-                        throw collector.writeFailure;
-                    }
-                    pool.discard(index);
-                    if (!lenient) {
-                        throw e;
-                    }
-                    skipped.add(new Skipped(source.displayName(), reason(e)));
+                    result = results.get(i).get();
+                } catch (ExecutionException e) {
+                    throw rethrow(e.getCause());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("interrupted while reading sources", e);
+                }
+                if (result.skipped() != null) {
+                    skipped.add(result.skipped());
                     continue;
                 }
-                // The last partial batch is still in memory. Write it before the file counts as parsed.
-                collector.finish();
-                pool.commit(index);
-                batches += collector.batches;
-                statements += collector.statements;
-                rejected += collector.rejectedIris;
-                predicates.addAll(collector.predicates.values());
+                statements += result.statements();
+                rejected += result.rejectedIris();
+                batches += result.batches();
+                predicates.addAll(result.predicates());
                 extracted++;
             }
 
             writePredicates(predicatesDir.resolve("predicates.parquet"), predicates);
             long distinct = pool.finish();
+            deleteRecursively(stateDir);
+            deleteRecursively(runsDir);
             return new ExtractionSummary(statements, output, distinct, batches, predicates.size(), rejected,
                     extracted, skipped);
         } catch (IOException | RuntimeException e) {
-            // A failed extraction leaves no partial dataset behind, so a later run cannot read it as complete.
+            // The state is kept, so the extraction can be resumed. Only the output is absent, so nothing reads the
+            // partial dataset as complete. Wait for the readers to stop before the pool is stopped.
+            readers.shutdownNow();
+            try {
+                readers.awaitTermination(1, TimeUnit.MINUTES);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
             pool.abort();
-            deleteRecursively(runsDir);
-            deleteRecursively(predicatesDir);
-            deleteRecursively(irisDir);
             throw e;
+        } finally {
+            readers.shutdown();
         }
+    }
+
+    /**
+     * Prepares a resume. A file that the saved state names must still exist, or the state is damaged. Every other run
+     * and predicate file is left over from an unfinished input, and is deleted.
+     */
+    private static void removeUnreferenced(ManifestStore.Manifest state, Path runsDir, Path stateDir)
+            throws IOException {
+        Set<String> runs = new HashSet<>();
+        for (List<String> level : state.sharedLevels()) {
+            runs.addAll(level);
+        }
+        Set<String> predicates = new HashSet<>();
+        for (ManifestStore.CompletedFile c : state.completed()) {
+            predicates.add(c.predicatesFile());
+        }
+        for (String name : runs) {
+            if (!Files.exists(runsDir.resolve(name))) {
+                throw new IOException("the saved state names " + name + ", which is missing; run without --resume");
+            }
+        }
+        for (String name : predicates) {
+            if (!Files.exists(stateDir.resolve(name))) {
+                throw new IOException("the saved state names " + name + ", which is missing; run without --resume");
+            }
+        }
+        deleteUnlisted(runsDir, runs);
+        try (Stream<Path> files = Files.list(stateDir)) {
+            for (Path file : files.toList()) {
+                String name = file.getFileName().toString();
+                if (name.startsWith("pred-") && !predicates.contains(name)) {
+                    Files.delete(file);
+                }
+            }
+        }
+    }
+
+    private static void deleteUnlisted(Path dir, Set<String> keep) throws IOException {
+        try (Stream<Path> files = Files.list(dir)) {
+            for (Path file : files.toList()) {
+                if (!keep.contains(file.getFileName().toString())) {
+                    Files.delete(file);
+                }
+            }
+        }
+    }
+
+    /**
+     * The identity of an input, which a resume uses to recognise it. A local file is identified by its path, size and
+     * modification time, so a changed file is read again. A remote file is identified by its URL.
+     */
+    static String keyOf(RdfSource source) throws IOException {
+        URI uri = source.uris().isEmpty() ? null : source.uris().get(0);
+        if (uri == null) {
+            return "none:" + source.displayName();
+        }
+        if ("file".equalsIgnoreCase(uri.getScheme())) {
+            Path file = Path.of(uri);
+            BasicFileAttributes attributes = Files.readAttributes(file, BasicFileAttributes.class);
+            return "file:" + file.toAbsolutePath() + "|" + attributes.size() + "|"
+                    + attributes.lastModifiedTime().toMillis();
+        }
+        return uri.toString();
+    }
+
+    /** The key of a source, or a name made from its display name when the key cannot be made, such as a missing file. */
+    private static String keyOrName(RdfSource source) {
+        StringBuilder key = new StringBuilder();
+        try {
+            key.append(keyOf(source));
+        } catch (IOException e) {
+            key.append("unreadable:").append(source.displayName());
+        }
+        // The expected checksums are part of the identity. Entries for one file that expect different content are
+        // checked separately, and identical entries are read once.
+        for (RdfSource.Checksum checksum : source.checksums()) {
+            key.append('|').append(checksum.algorithm()).append('=').append(checksum.hex());
+        }
+        return key.toString();
+    }
+
+    /** A short name for an input, from its key, used in the names of its run and predicate files. */
+    static String tokenOf(String key) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(key.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest, 0, 8);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is not available", e);
+        }
+    }
+
+    /**
+     * Reads one source, and hands its runs to the pool. A source that was read completely before is restored from the
+     * saved state instead. A source that cannot be read as RDF is discarded and, when the extraction is lenient, reported
+     * as skipped. A failure to write output is always thrown.
+     */
+    private FileResult read(RdfSource source, String key, int index, boolean lenient, RunPool pool, Path runsDir,
+                            Path stateDir, Map<String, ManifestStore.CompletedFile> done) throws IOException {
+        ManifestStore.CompletedFile record = done.get(key);
+        if (record != null) {
+            return restored(record, stateDir);
+        }
+        String token = tokenOf(key);
+        Collector collector = new Collector(index, token, pool, runsDir);
+        try {
+            parse(source, collector);
+        } catch (IOException | RuntimeException e) {
+            if (collector.writeFailure != null) {
+                throw collector.writeFailure;
+            }
+            pool.discard(index);
+            if (!lenient) {
+                throw e;
+            }
+            return FileResult.skippedWith(new Skipped(source.displayName(), reason(e)));
+        }
+        // The last partial batch is still in memory. Write it before the file counts as parsed.
+        collector.finish();
+        // The predicates are saved before the file is committed, so a committed file always has them.
+        String predicatesFile = "pred-" + token + ".parquet";
+        writePredicates(stateDir.resolve(predicatesFile), collector.predicates.values().stream().collect(
+                java.util.stream.Collectors.toCollection(TreeSet::new)));
+        pool.commit(index, new ManifestStore.CompletedFile(key, collector.statements, collector.rejectedIris,
+                collector.batches, predicatesFile));
+        return new FileResult(collector.statements, collector.rejectedIris, collector.batches,
+                Set.copyOf(collector.predicates.values()), null);
+    }
+
+    /** A source read completely in an earlier run: its counts and predicates come from the saved state. */
+    private static FileResult restored(ManifestStore.CompletedFile record, Path stateDir) throws IOException {
+        Set<IriParts> predicates = new TreeSet<>();
+        IriParquetReader.forEach(stateDir.resolve(record.predicatesFile()), r -> predicates.add(r.parts()));
+        return new FileResult(record.statements(), record.rejectedIris(), record.batches(), predicates, null);
+    }
+
+    /** What reading one source produced: its counts, or the reason it was skipped. */
+    private record FileResult(long statements, long rejectedIris, long batches, Set<IriParts> predicates,
+                              Skipped skipped) {
+
+        static FileResult skippedWith(Skipped skipped) {
+            return new FileResult(0, 0, 0, Set.of(), skipped);
+        }
+    }
+
+    /** How many sources are read at once: up to four, and no more than the machine can run in parallel. */
+    static int readerThreads(int sources) {
+        return Math.max(1, Math.min(Math.min(MAX_READERS, RunPool.defaultThreads()), sources));
+    }
+
+    /** The exception to throw for a failure in a reader, keeping its type. */
+    private static RuntimeException rethrow(Throwable cause) throws IOException {
+        if (cause instanceof IOException io) {
+            throw io;
+        }
+        if (cause instanceof RuntimeException runtime) {
+            throw runtime;
+        }
+        if (cause instanceof Error error) {
+            throw error;
+        }
+        throw new IOException("reading a source failed", cause);
     }
 
     /**
@@ -300,6 +540,7 @@ public final class IriExtractor {
     private final class Collector extends AbstractRDFHandler {
 
         private final int fileIndex;
+        private final String token;
         private final RunPool pool;
         private final Path runsDir;
 
@@ -313,8 +554,9 @@ public final class IriExtractor {
         /** Set when a run cannot be written or handed on. Such a failure stops the whole extraction. */
         private IOException writeFailure;
 
-        Collector(int fileIndex, RunPool pool, Path runsDir) {
+        Collector(int fileIndex, String token, RunPool pool, Path runsDir) {
             this.fileIndex = fileIndex;
+            this.token = token;
             this.pool = pool;
             this.runsDir = runsDir;
         }
@@ -374,7 +616,7 @@ public final class IriExtractor {
             List<IriParts> sorted = new ArrayList<>(batch.values());
             sorted.sort(null);
             batches++;
-            Path run = runsDir.resolve(String.format("f%06d-run-%06d.parquet", fileIndex, batches));
+            Path run = runsDir.resolve(token + String.format("-run-%06d.parquet", batches));
             try (IriParquetWriter writer = new IriParquetWriter(run)) {
                 for (IriParts parts : sorted) {
                     writer.write(new IriRecord(parts));

@@ -135,6 +135,7 @@ class RemoteExtractionTest {
         IriExtractor.ExtractionSummary summary =
                 new IriExtractor(dir.resolve("ds")).extract(base + "/meta/list.meta4");
 
+        // a and e name the same file, but only a expects a checksum, so they are different entries and both are read.
         assertEquals(3, summary.files(), "a, b and e are extracted");
         assertEquals(9, summary.statements());
         List<String> skipped = sourceNames(summary);
