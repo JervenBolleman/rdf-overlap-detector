@@ -56,8 +56,15 @@ Two GitHub Actions workflows live in `.github/workflows/`:
   request and every push to `main`.
 - **`release`** is started by hand from the Actions tab, with a version such as `1.0.0`. It builds and tests the
   uber jar, and builds native binaries for Linux (x64), macOS (arm64 and x64) and Windows (x64), with a smoke test on each.
-  It then creates the GitHub release `v<version>` with all of them attached. The version is set only in the
-  runner's copy of the pom, so the committed pom keeps `0.1.0-SNAPSHOT`.
+  The version must be a semantic version (`MAJOR.MINOR.PATCH`, optionally with a pre-release such as `-rc.1`), must
+  not be older than the pom's version, and must not already be tagged. The release then:
+  - commits the release version to the pom, and tags that commit `v<version>`;
+  - commits the next patch snapshot to the pom on `main`, so `1.2.3` leaves `main` at `1.2.4-SNAPSHOT`;
+  - pushes the commits and the tag in one atomic push, so a `main` that has moved on fails the release cleanly;
+  - creates the GitHub release `v<version>` with all the artifacts attached.
+
+  The push to `main` needs the `github-actions` bot to be allowed to push there. If branch protection forbids it,
+  the release fails before anything is published.
 
 The workflows have not run yet, because the repository is not on GitHub.
 

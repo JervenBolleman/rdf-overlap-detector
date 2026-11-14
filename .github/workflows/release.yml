@@ -1,7 +1,8 @@
 name: release
 
-# Run by hand from the Actions tab. Builds the uber jar and native binaries for Linux, macOS and Windows,
-# then publishes them as one GitHub release tagged v<version>.
+# Run by hand from the Actions tab. Builds the uber jar and native binaries for Linux, macOS and Windows, then
+# publishes them as one GitHub release tagged v<version>. The tag points at a commit that sets the pom to the release
+# version. A following commit on main sets the pom to the next patch snapshot, so main is always ahead of the release.
 on:
   workflow_dispatch:
     inputs:
@@ -17,20 +18,50 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - name: Check the version string
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Check the version, the pom and the tags
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
-            echo "Not a valid version: $VERSION" >&2
-            exit 1
-          fi
+          python3 - <<'PY'
+          import os, re, subprocess, sys
+          import xml.etree.ElementTree as ET
+
+          version = os.environ["VERSION"]
+          # Semantic versioning 2.0.0: MAJOR.MINOR.PATCH with an optional pre-release, and no build metadata.
+          semver = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?$")
+          match = semver.match(version)
+          if not match:
+              sys.exit(f"Not a semantic version: {version}")
+          release = tuple(int(x) for x in match.groups()[:3])
+
+          # The pom must be behind the release: its base version must be lower, or equal to a snapshot of this version.
+          pom = ET.parse("pom.xml").getroot().find("{http://maven.apache.org/POM/4.0.0}version").text
+          pom_match = semver.match(pom)
+          if not pom_match:
+              sys.exit(f"The pom version is not semantic: {pom}")
+          base = tuple(int(x) for x in pom_match.groups()[:3])
+          is_snapshot = pom.endswith("-SNAPSHOT")
+          if release < base or (release == base and not is_snapshot):
+              sys.exit(f"Release {version} is not ahead of the pom version {pom}")
+
+          tags = subprocess.run(["git", "ls-remote", "--tags", "origin", f"refs/tags/v{version}"],
+                                capture_output=True, text=True, check=True).stdout.strip()
+          if tags:
+              sys.exit(f"The tag v{version} already exists")
+          print(f"Release {version} is valid and is ahead of the pom version {pom}")
+          PY
 
   uber-jar:
     needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-java@v4
         with:
@@ -79,6 +110,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - uses: graalvm/setup-graalvm@v1
         with:
@@ -138,17 +171,41 @@ jobs:
           path: dist/*
 
   publish:
-    needs: [uber-jar, native]
+    needs: [validate, uber-jar, native]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+
+      - name: Commit and tag the release, then prepare the next development version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          NEXT=$(python3 -c "import os; major, minor, patch = os.environ['VERSION'].split('-')[0].split('.'); print(f'{major}.{minor}.{int(patch) + 1}-SNAPSHOT')")
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          mvn -B -q -DgenerateBackupPoms=false org.codehaus.mojo:versions-maven-plugin:2.18.0:set -DnewVersion="$VERSION"
+          git commit -am "Release $VERSION"
+          git tag -a "v$VERSION" -m "Release $VERSION"
+
+          mvn -B -q -DgenerateBackupPoms=false org.codehaus.mojo:versions-maven-plugin:2.18.0:set -DnewVersion="$NEXT"
+          git commit -am "Prepare next development version $NEXT"
+
+          # One atomic push, so a main that has moved on fails the whole release and nothing is half published.
+          git push --atomic origin "HEAD:refs/heads/main" "refs/tags/v$VERSION"
 
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
         run: |
-          gh release create "v$VERSION" dist/* --title "v$VERSION" --generate-notes
+          gh release create "v$VERSION" dist/* --title "v$VERSION" --generate-notes --verify-tag
