@@ -374,3 +374,10 @@ held every one open, which broke the open-file limit.
   and the reason. A file taken from the saved state logs `restored`.
 - Error messages moved from stderr to the log: skipped files, and failed extract or overlap runs. Usage text stays on
   stderr.
+
+## Hardwood 1.1.0.Beta3
+
+- Moved from 1.1.0.Beta2 to 1.1.0.Beta3. The public API of the reader and writer packages is unchanged, and so are the
+  codec dependencies (zstd-jni 1.5.7-9, and the others Hardwood lists as optional).
+- Checked: all 147 tests pass, and the 300,000-IRI extraction under the 768-file limit gives the same result.
+- The earlier notes above that name Beta2 describe the spikes at the time. The version in use is Beta3.
