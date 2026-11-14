@@ -132,6 +132,10 @@ public final class IriExtractor {
             if (RdfSources.isMetalink(RdfSources.fileName(uri))) {
                 return run(RdfSources.readMetalink(uri), true);
             }
+            if (RdfSources.isSsh(input)) {
+                RdfSources.Listing listing = RdfSources.listSsh(uri);
+                return run(listing.sources(), listing.directory());
+            }
             return run(List.of(RdfSource.remote(uri)), false);
         }
         return extract(Path.of(input));

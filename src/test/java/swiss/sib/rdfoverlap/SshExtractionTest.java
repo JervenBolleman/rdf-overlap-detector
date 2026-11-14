@@ -105,6 +105,55 @@ class SshExtractionTest {
     }
 
     @Test
+    void sshDirectoryExtractsEveryRdfFileAndSkipsTheRest() throws Exception {
+        Path tree = dir.resolve("tree");
+        sample("sample.nt", tree);
+        sample("sample.ttl.gz", tree.resolve("nested"));
+        Files.writeString(tree.resolve("notes.txt"), "This is not RDF.\n");
+
+        IriExtractor.ExtractionSummary summary =
+                new IriExtractor(dir.resolve("ds")).extract(sshUrl("localhost", tree));
+
+        assertEquals(2, summary.files());
+        assertEquals(6, summary.statements());
+        assertEquals(1, summary.skipped().size());
+        assertTrue(summary.skipped().get(0).source().endsWith("notes.txt"), summary.skipped().get(0).source());
+    }
+
+    @Test
+    void sshDirectoryWithOnlyOneBrokenFileIsADirectoryNotAnError() throws Exception {
+        Path tree = dir.resolve("single");
+        Files.createDirectories(tree);
+        Files.writeString(tree.resolve("broken.nt"), "<http://ex/a> <http://ex/p>\n");
+
+        IriExtractor.ExtractionSummary summary =
+                new IriExtractor(dir.resolve("ds")).extract(sshUrl("localhost", tree));
+
+        assertEquals(0, summary.files());
+        assertEquals(1, summary.skipped().size());
+    }
+
+    @Test
+    void emptySshDirectoryGivesAnEmptyDataset() throws Exception {
+        Path empty = dir.resolve("empty");
+        Files.createDirectories(empty);
+
+        IriExtractor.ExtractionSummary summary =
+                new IriExtractor(dir.resolve("ds")).extract(sshUrl("localhost", empty));
+
+        assertEquals(0, summary.files());
+        assertEquals(0, summary.skipped().size());
+    }
+
+    @Test
+    void missingSshDirectoryIsAnError() throws Exception {
+        IOException e = assertThrows(IOException.class,
+                () -> new IriExtractor(dir.resolve("ds")).extract(sshUrl("localhost", dir.resolve("no-such-dir"))));
+
+        assertTrue(e.getMessage().contains("ssh exited with status"), e.getMessage());
+    }
+
+    @Test
     void metalinkCanListSshFiles() throws Exception {
         Path good = sample("sample.nt", dir.resolve("remote"));
         Path missing = dir.resolve("remote").resolve("missing.nt");

@@ -269,4 +269,11 @@ host. The output is streamed into the parser, as for http.
 - The client is overridable with `-Drdfoverlap.ssh=...`. The tests use a stand-in client that runs the remote command
   in the local shell, so the quoting and streaming are tested without a server. These tests are skipped on Windows.
 
-Not done: directory listing over ssh, and paths relative to the home directory (for example `~/data`).
+## Directory listing over ssh (added after ssh input)
+
+An ssh path that is a directory is listed with `find -L -- '<path>' -type f -print0` on the host. It is read as a
+directory: files are sorted, and the files that are not RDF are skipped as they are locally. If the path is a file,
+`find` prints the path itself, and it is read as a single file, strictly. A missing path is an error. The file
+names are read as NUL-separated output, so names with newlines work.
+
+Not done: paths relative to the home directory (for example `~/data`).

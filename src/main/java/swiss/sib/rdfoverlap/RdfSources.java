@@ -9,6 +9,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -140,6 +141,51 @@ final class RdfSources {
      * cannot be read as ssh options. The path is quoted for the remote shell.
      */
     static InputStream openSsh(URI uri) throws IOException {
+        String path = checkSsh(uri);
+        return runSsh(uri, "cat -- " + shellQuote(path));
+    }
+
+    /** The files found under an ssh path, and whether the path was a directory. */
+    record Listing(boolean directory, List<RdfSource> sources) {
+    }
+
+    /**
+     * Lists an ssh path with find. A path that is a file lists as itself, and is then read as a single file. A
+     * directory lists the regular files below it, in sorted order, and is read as a directory. A missing path is an
+     * error.
+     */
+    static Listing listSsh(URI uri) throws IOException {
+        String path = checkSsh(uri);
+        byte[] output;
+        try (InputStream in = runSsh(uri, "find -L -- " + shellQuote(path) + " -type f -print0")) {
+            output = in.readAllBytes();
+        }
+        List<String> found = new ArrayList<>();
+        int start = 0;
+        for (int i = 0; i < output.length; i++) {
+            if (output[i] == 0) {
+                found.add(new String(output, start, i - start, StandardCharsets.UTF_8));
+                start = i + 1;
+            }
+        }
+        if (found.size() == 1 && found.get(0).equals(path)) {
+            return new Listing(false, List.of(RdfSource.remote(uri)));
+        }
+        found.sort(null);
+        List<RdfSource> sources = new ArrayList<>();
+        for (String file : found) {
+            try {
+                sources.add(RdfSource.remote(new URI("ssh", uri.getUserInfo(), uri.getHost(), uri.getPort(), file,
+                        null, null)));
+            } catch (java.net.URISyntaxException e) {
+                throw new IOException("cannot make an ssh URL for " + file, e);
+            }
+        }
+        return new Listing(true, sources);
+    }
+
+    /** Checks the parts of an ssh URL that go onto the command line, and returns its absolute path. */
+    private static String checkSsh(URI uri) throws IOException {
         String host = uri.getHost();
         String user = uri.getUserInfo();
         int port = uri.getPort();
@@ -156,13 +202,19 @@ final class RdfSources {
         if (path == null || !path.startsWith("/") || path.length() == 1) {
             throw new IOException("ssh URL needs an absolute path: " + uri);
         }
+        return path;
+    }
+
+    /** Runs one command on the host of an ssh URL, and returns its output. */
+    private static InputStream runSsh(URI uri, String remoteCommand) throws IOException {
         List<String> command = new ArrayList<>(List.of(sshCommand(), "-o", "BatchMode=yes", "-o", "ConnectTimeout=30"));
-        if (port != -1) {
+        if (uri.getPort() != -1) {
             command.add("-p");
-            command.add(String.valueOf(port));
+            command.add(String.valueOf(uri.getPort()));
         }
-        command.add(user == null ? host : user + "@" + host);
-        command.add("cat -- " + shellQuote(path));
+        String user = uri.getUserInfo();
+        command.add(user == null ? uri.getHost() : user + "@" + uri.getHost());
+        command.add(remoteCommand);
 
         Path stderr = Files.createTempFile("rdfoverlap-ssh-", ".err");
         Process process;
