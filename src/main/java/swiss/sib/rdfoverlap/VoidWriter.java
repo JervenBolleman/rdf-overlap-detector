@@ -71,7 +71,7 @@ final class VoidWriter {
         }
 
         // Per dataset: range key -> IRIs of that dataset in the range, for the ranges it shares with another.
-        List<TreeMap<String, Long>> counts = new ArrayList<>();
+        List<TreeMap<RangeKey.Range, Long>> counts = new ArrayList<>();
         for (int i = 0; i < names.size(); i++) {
             counts.add(new TreeMap<>());
         }
@@ -85,11 +85,11 @@ final class VoidWriter {
         }
 
         // Subset IRIs, numbered in range-key order within each dataset.
-        List<Map<String, IRI>> subsets = new ArrayList<>();
+        List<Map<RangeKey.Range, IRI>> subsets = new ArrayList<>();
         for (int i = 0; i < names.size(); i++) {
-            Map<String, IRI> byKey = new TreeMap<>();
+            Map<RangeKey.Range, IRI> byKey = new TreeMap<>();
             int n = 0;
-            for (String key : counts.get(i).keySet()) {
+            for (RangeKey.Range key : counts.get(i).keySet()) {
                 byKey.put(key, VF.createIRI(datasets.get(i) + "/range/" + n++));
             }
             subsets.add(byKey);
@@ -99,11 +99,11 @@ final class VoidWriter {
             IRI dataset = datasets.get(i);
             model.add(dataset, RDF.TYPE, DATASET);
             model.add(dataset, ENTITIES, VF.createLiteral(totals.get(i)));
-            for (Map.Entry<String, Long> range : counts.get(i).entrySet()) {
+            for (Map.Entry<RangeKey.Range, Long> range : counts.get(i).entrySet()) {
                 IRI subset = subsets.get(i).get(range.getKey());
                 model.add(dataset, SUBSET, subset);
                 model.add(subset, RDF.TYPE, DATASET);
-                model.add(subset, URI_SPACE, VF.createLiteral(range.getKey()));
+                model.add(subset, URI_SPACE, VF.createLiteral(range.getKey().toString()));
                 model.add(subset, ENTITIES, VF.createLiteral(range.getValue()));
             }
         }

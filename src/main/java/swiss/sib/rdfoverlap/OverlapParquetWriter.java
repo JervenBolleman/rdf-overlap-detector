@@ -40,9 +40,9 @@ public final class OverlapParquetWriter implements Closeable {
         this.rows = writer.rowWriter();
     }
 
-    public void write(String range, long countFirst, long countSecond, long sharedIris) throws IOException {
+    public void write(RangeKey.Range range, long countFirst, long countSecond, long sharedIris) throws IOException {
         rows.writeRow(s -> s
-                .setString(RANGE, range)
+                .setString(RANGE, range.toString())
                 .setLong(COUNT_FIRST, countFirst)
                 .setLong(COUNT_SECOND, countSecond)
                 .setLong(SHARED_IRIS, sharedIris));

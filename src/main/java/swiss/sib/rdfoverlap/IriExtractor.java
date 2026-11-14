@@ -11,7 +11,8 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeMap;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Stream;
 import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.Statement;
@@ -53,6 +54,9 @@ public final class IriExtractor {
 
     public static final int DEFAULT_BATCH_SIZE = 10_000;
 
+    /** Rows per row group in the output. A merge holds one row group in memory at a time. */
+    static final int ROW_GROUP_ROWS = 1_000_000;
+
     /**
      * The JDK's bundled jaxp.properties caps XML entity sizes and replacements at 100,000. Real RDF/XML dumps have
      * longer literals, such as Rhea's htmlEquation values, which fail under that cap. The input is a dump the user
@@ -77,17 +81,24 @@ public final class IriExtractor {
     private final Path outDir;
     private final int batchSize;
     private final ParserConfig parserConfig;
+    private final int fanIn;
 
     public IriExtractor(Path outDir) {
         this(outDir, DEFAULT_BATCH_SIZE);
     }
 
     public IriExtractor(Path outDir, int batchSize) {
+        this(outDir, batchSize, RunPool.DEFAULT_FAN_IN);
+    }
+
+    /** The fan-in is how many runs one merge combines. It is exposed so the tests can force several merge levels. */
+    IriExtractor(Path outDir, int batchSize, int fanIn) {
         if (batchSize < 1) {
             throw new IllegalArgumentException("batchSize must be at least 1: " + batchSize);
         }
         this.outDir = outDir;
         this.batchSize = batchSize;
+        this.fanIn = fanIn;
         this.parserConfig = new ParserConfig()
                 .set(new LongRioSetting("org.eclipse.rdf4j.rio.loader.max_expanded_bytes", "limit", MAX_EXPANDED_BYTES),
                         MAX_EXPANDED_BYTES)
@@ -107,15 +118,17 @@ public final class IriExtractor {
     /**
      * What an extraction produced.
      *
-     * @param statements  statements parsed from the files that were extracted
-     * @param runs        the run files written, in order
-     * @param predicates  distinct predicates across those files
+     * @param statements   statements parsed from the files that were extracted
+     * @param output       the sorted, deduplicated IRI file
+     * @param distinctIris distinct IRIs in the output
+     * @param batches      run files written before merging
+     * @param predicates   distinct predicates across those files
      * @param rejectedIris IRIs that could not be decomposed and were skipped
-     * @param files       files extracted
-     * @param skipped     files that could not be read as RDF, with the reason
+     * @param files        files extracted
+     * @param skipped      files that could not be read as RDF, with the reason
      */
-    public record ExtractionSummary(long statements, List<Path> runs, int predicates, long rejectedIris,
-                                    int files, List<Skipped> skipped) {
+    public record ExtractionSummary(long statements, Path output, long distinctIris, long batches, int predicates,
+                                    long rejectedIris, int files, List<Skipped> skipped) {
     }
 
     /**
@@ -159,7 +172,7 @@ public final class IriExtractor {
     }
 
     /**
-     * Extracts the given sources in order.
+     * Extracts the given sources in order, and merges their runs as they arrive into the dataset's sorted IRI file.
      *
      * @param sources the files to read
      * @param lenient true to skip a source that cannot be read as RDF, false to fail on it
@@ -167,54 +180,62 @@ public final class IriExtractor {
     private ExtractionSummary run(List<RdfSource> sources, boolean lenient) throws IOException {
         Path runsDir = outDir.resolve("runs");
         Path predicatesDir = outDir.resolve("predicates");
+        Path irisDir = outDir.resolve("iris");
+        Path output = irisDir.resolve("iris.parquet");
         deleteRecursively(runsDir);
         deleteRecursively(predicatesDir);
+        deleteRecursively(irisDir);
         Files.createDirectories(runsDir);
         Files.createDirectories(predicatesDir);
+        Files.createDirectories(irisDir);
 
-        Map<String, IriParts> predicates = new TreeMap<>();
-        List<Path> runs = new ArrayList<>();
+        RunPool pool = new RunPool(runsDir, output, fanIn, ROW_GROUP_ROWS);
+        Set<IriParts> predicates = new TreeSet<>();
         List<Skipped> skipped = new ArrayList<>();
         long statements = 0;
         long rejected = 0;
+        long batches = 0;
         int extracted = 0;
         int index = 0;
-        for (RdfSource source : sources) {
-            index++;
-            Collector collector = new Collector(String.format("f%06d-", index));
-            try {
-                parse(source, collector);
-            } catch (IOException | RuntimeException e) {
-                if (collector.writeFailure != null) {
-                    deleteRecursively(runsDir);
-                    deleteRecursively(predicatesDir);
-                    throw collector.writeFailure;
+        try {
+            for (RdfSource source : sources) {
+                index++;
+                Collector collector = new Collector(index, pool, runsDir);
+                try {
+                    parse(source, collector);
+                } catch (IOException | RuntimeException e) {
+                    if (collector.writeFailure != null) {
+                        throw collector.writeFailure;
+                    }
+                    pool.discard(index);
+                    if (!lenient) {
+                        throw e;
+                    }
+                    skipped.add(new Skipped(source.displayName(), reason(e)));
+                    continue;
                 }
-                deleteFiles(collector.runs);
-                if (!lenient) {
-                    deleteRecursively(runsDir);
-                    deleteRecursively(predicatesDir);
-                    throw e;
-                }
-                skipped.add(new Skipped(source.displayName(), reason(e)));
-                continue;
-            }
-            try {
+                // The last partial batch is still in memory. Write it before the file counts as parsed.
                 collector.finish();
-            } catch (IOException e) {
-                deleteRecursively(runsDir);
-                deleteRecursively(predicatesDir);
-                throw e;
+                pool.commit(index);
+                batches += collector.batches;
+                statements += collector.statements;
+                rejected += collector.rejectedIris;
+                predicates.addAll(collector.predicates.values());
+                extracted++;
             }
-            runs.addAll(collector.runs);
-            statements += collector.statements;
-            rejected += collector.rejectedIris;
-            collector.predicates.forEach(predicates::putIfAbsent);
-            extracted++;
-        }
 
-        writePredicates(predicatesDir.resolve("predicates.parquet"), predicates);
-        return new ExtractionSummary(statements, runs, predicates.size(), rejected, extracted, skipped);
+            writePredicates(predicatesDir.resolve("predicates.parquet"), predicates);
+            long distinct = pool.finish();
+            return new ExtractionSummary(statements, output, distinct, batches, predicates.size(), rejected,
+                    extracted, skipped);
+        } catch (IOException | RuntimeException e) {
+            // A failed extraction leaves no partial dataset behind, so a later run cannot read it as complete.
+            pool.abort();
+            deleteRecursively(runsDir);
+            deleteRecursively(predicatesDir);
+            deleteRecursively(irisDir);
+            throw e;
+        }
     }
 
     /**
@@ -264,10 +285,10 @@ public final class IriExtractor {
         return e.getClass().getSimpleName() + (firstLine.isEmpty() ? "" : ": " + firstLine);
     }
 
-    private static void writePredicates(Path file, Map<String, IriParts> predicates) throws IOException {
+    private static void writePredicates(Path file, Set<IriParts> predicates) throws IOException {
         try (IriParquetWriter writer = new IriParquetWriter(file)) {
-            for (Map.Entry<String, IriParts> e : predicates.entrySet()) {
-                writer.write(new IriRecord(e.getKey(), e.getValue()));
+            for (IriParts parts : predicates) {
+                writer.write(new IriRecord(parts));
             }
             if (!predicates.isEmpty()) {
                 writer.endRowGroup();
@@ -275,23 +296,27 @@ public final class IriExtractor {
         }
     }
 
-    /** Holds the batch and the output of one input file. */
+    /** Holds the batch of one input file, and sends each run it writes to the run pool. */
     private final class Collector extends AbstractRDFHandler {
 
-        private final String runPrefix;
+        private final int fileIndex;
+        private final RunPool pool;
+        private final Path runsDir;
 
         /** Batch of distinct IRIs and their parts, keyed by IRI. */
         private final Map<String, IriParts> batch = new HashMap<>();
         private final Map<String, IriParts> predicates = new HashMap<>();
-        private final List<Path> runs = new ArrayList<>();
         private long statements;
         private long rejectedIris;
+        private int batches;
 
-        /** Set when a run cannot be written. Such a failure stops the whole extraction. */
+        /** Set when a run cannot be written or handed on. Such a failure stops the whole extraction. */
         private IOException writeFailure;
 
-        Collector(String runPrefix) {
-            this.runPrefix = runPrefix;
+        Collector(int fileIndex, RunPool pool, Path runsDir) {
+            this.fileIndex = fileIndex;
+            this.pool = pool;
+            this.runsDir = runsDir;
         }
 
         @Override
@@ -346,19 +371,26 @@ public final class IriExtractor {
             if (batch.isEmpty()) {
                 return;
             }
-            List<String> sorted = new ArrayList<>(batch.keySet());
+            List<IriParts> sorted = new ArrayList<>(batch.values());
             sorted.sort(null);
-            Path run = outDir.resolve("runs").resolve(runPrefix + String.format("run-%06d.parquet", runs.size() + 1));
+            batches++;
+            Path run = runsDir.resolve(String.format("f%06d-run-%06d.parquet", fileIndex, batches));
             try (IriParquetWriter writer = new IriParquetWriter(run)) {
-                for (String iri : sorted) {
-                    writer.write(new IriRecord(iri, batch.get(iri)));
+                for (IriParts parts : sorted) {
+                    writer.write(new IriRecord(parts));
                 }
                 writer.endRowGroup();
             } catch (IOException e) {
                 writeFailure = e;
                 throw new RDFHandlerException("cannot write " + run, e);
             }
-            runs.add(run);
+            // Hand the run on only once it is closed, so the merger never reads a file that is still being written.
+            try {
+                pool.run(fileIndex, run);
+            } catch (IOException e) {
+                writeFailure = e;
+                throw new RDFHandlerException("cannot merge " + run, e);
+            }
             batch.clear();
         }
 
@@ -369,12 +401,6 @@ public final class IriExtractor {
             } catch (RDFHandlerException e) {
                 throw writeFailure != null ? writeFailure : new IOException(e);
             }
-        }
-    }
-
-    private static void deleteFiles(List<Path> files) throws IOException {
-        for (Path file : files) {
-            Files.deleteIfExists(file);
         }
     }
 

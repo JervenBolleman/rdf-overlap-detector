@@ -295,3 +295,27 @@ image has no entry for those names, so compressed bytes went to the parser uncha
 Verified on Linux x86_64 with GraalVM 25: the sample directory extracts with `files=17`, and the zstd, xz and gzip
 inputs give three statements each. `sort` and `overlap` work on the output. The release smoke test covers the same
 steps on all four platforms, so the other platforms are checked when the workflow runs.
+
+## Extract and merge in one step (replaces the separate sort)
+
+The separate `sort` command is gone. `extract` now writes `iris/iris.parquet` directly, and runs are merged while
+extraction continues. Two reasons: a dataset with many batches created many run files, and merging them all at once
+held every one open, which broke the open-file limit.
+
+- Runs are merged 16 at a time, the smallest first, on one background thread (`RunPool`). An open merge therefore
+  holds at most 16 inputs, whatever the dataset size.
+- Runs are merged within their own input file, and join the shared pool only when that file succeeds. A file that
+  fails is discarded, and nothing that other files depend on is undone.
+- When extraction ends, the shared pool is merged into `iris/iris.parquet`, verified, and the run files are removed.
+- Checked with 300,000 IRIs (60 batches) under `ulimit -n 24` and `64`. The output holds the 600,000 distinct IRIs,
+  and no run files are left.
+
+## Components as the key (no IRI text in the files)
+
+- The parquet files no longer store the IRI text. The components are stored, and the text is rebuilt when needed.
+- An empty port, as in `http://h:/x`, is the scheme's default and is not kept. It is rebuilt as `http://h/x`.
+- `IriParts` and `IriRecord` compare by components, with nulls first. Merge, deduplication and the batch sort use this
+  order, so no string is built for a comparison. This order replaces the old string order. All merge inputs come from
+  this tool, so the change is consistent.
+- Range overlap uses `RangeKey.Range`, which holds the parts and a prefix length. It compares and hashes on the
+  components, and builds text only for output. The string form `RangeKey.of(String, int)` is kept and checked to agree.

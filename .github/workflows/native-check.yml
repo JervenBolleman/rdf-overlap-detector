@@ -38,13 +38,11 @@ jobs:
         run: |
           BIN="target/rdf-overlap-detector"
           "$BIN" help
-          # The .zst sample exercises the zstd native library, which both reads and writes zstd. The sort then reads
-          # the zstd run files back, so it covers both directions.
+          # The .zst sample exercises the zstd native library, which both reads and writes zstd. The run merge reads the
+          # zstd runs back, so it covers both directions.
           OUT="$RUNNER_TEMP/smoke-out"
           "$BIN" extract src/test/resources/samples/sample.nt.zst "$OUT" | tee "$RUNNER_TEMP/smoke.txt"
           grep -q 'statements=3' "$RUNNER_TEMP/smoke.txt"
-          "$BIN" sort "$OUT"
           # The whole sample directory: every syntax and compression, and one file that is not RDF at all.
           "$BIN" extract src/test/resources/samples "$RUNNER_TEMP/smoke-dir" | tee "$RUNNER_TEMP/smoke-dir.txt"
           grep -q 'files=17' "$RUNNER_TEMP/smoke-dir.txt"
-          "$BIN" sort "$RUNNER_TEMP/smoke-dir"

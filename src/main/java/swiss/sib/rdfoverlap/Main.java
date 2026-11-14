@@ -16,8 +16,8 @@ public final class Main {
             usage: rdf-overlap-detector <command> [args]
 
             commands:
-              extract   write the IRIs of RDF files as sorted runs; input is a file, a directory,\n                        an http(s) URL or a Metalink file (.meta4, .metalink)
-              sort      merge extracted batches into one sorted, deduplicated IRI file per dataset
+              extract   read RDF files and write one sorted, deduplicated IRI file for the dataset; input is a
+                        file, a directory, an http(s) URL, an ssh URL or a Metalink file (.meta4, .metalink)
               overlap   report IRI ranges that appear in two or more datasets, as VoID in void.ttl
             """;
 
@@ -43,7 +43,6 @@ public final class Main {
         }
         return switch (args[0]) {
             case "extract" -> extract(args, out, err);
-            case "sort" -> sort(args, out, err);
             case "overlap" -> overlap(args, out, err);
             case "-h", "--help", "help" -> {
                 out.print(USAGE);
@@ -87,23 +86,6 @@ public final class Main {
         }
     }
 
-    /** sort &lt;datasetDir&gt;: merges the run files of one dataset into its sorted IRI file. */
-    private static int sort(String[] args, PrintStream out, PrintStream err) {
-        if (args.length != 2) {
-            err.println("usage: rdf-overlap-detector sort <datasetDir>");
-            return 1;
-        }
-        try {
-            IriMerger.MergeSummary summary = new IriMerger(Path.of(args[1])).sort();
-            out.printf("runRows=%d distinctIris=%d passes=%d output=%s%n",
-                    summary.runRows(), summary.distinctIris(), summary.passes(), summary.output());
-            return 0;
-        } catch (IOException | IllegalStateException e) {
-            err.println("sort failed: " + e.getMessage());
-            return 3;
-        }
-    }
-
     /** extract &lt;input&gt; &lt;outDir&gt;: extracts an RDF file, a directory, a URL or a Metalink file. */
     private static int extract(String[] args, PrintStream out, PrintStream err) {
         if (args.length != 3) {
@@ -115,9 +97,10 @@ public final class Main {
             for (IriExtractor.Skipped skip : summary.skipped()) {
                 err.println("skipped (not RDF): " + skip.source() + ": " + skip.reason());
             }
-            out.printf("files=%d skipped=%d statements=%d runs=%d predicates=%d rejectedIris=%d%n",
-                    summary.files(), summary.skipped().size(), summary.statements(), summary.runs().size(),
-                    summary.predicates(), summary.rejectedIris());
+            out.printf("files=%d skipped=%d statements=%d batches=%d predicates=%d distinctIris=%d rejectedIris=%d%n",
+                    summary.files(), summary.skipped().size(), summary.statements(), summary.batches(),
+                    summary.predicates(), summary.distinctIris(), summary.rejectedIris());
+            out.println("sorted IRIs: " + summary.output());
             return 0;
         } catch (IOException | RDF4JException e) {
             err.println("extract failed: " + e.getMessage());

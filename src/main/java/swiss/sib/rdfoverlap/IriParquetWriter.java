@@ -33,7 +33,6 @@ public final class IriParquetWriter implements Closeable {
     public void write(IriRecord record) throws IOException {
         IriParts p = record.parts();
         rows.writeRow(s -> {
-            s.setString(IriSchema.IRI, record.iri());
             s.setString(IriSchema.SCHEME, p.scheme());
             if (p.userinfo() == null) {
                 s.setNull(IriSchema.USERINFO);

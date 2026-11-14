@@ -11,12 +11,12 @@ class IriSchemaTest {
     @Test
     void indexConstantsMatchColumnOrder() {
         List<String> expected = List.of(
-                "iri", "scheme", "userinfo", "host", "port", "path", "query", "fragment");
+                "scheme", "userinfo", "host", "port", "path", "query", "fragment");
         assertEquals(expected.size(), IriSchema.FILE_SCHEMA.getColumnCount());
         for (int i = 0; i < expected.size(); i++) {
             assertEquals(expected.get(i), IriSchema.FILE_SCHEMA.getColumn(i).name(), "column " + i);
         }
-        assertEquals(0, IriSchema.IRI);
-        assertEquals(7, IriSchema.FRAGMENT);
+        assertEquals(0, IriSchema.SCHEME);
+        assertEquals(6, IriSchema.FRAGMENT);
     }
 }

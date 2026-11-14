@@ -65,19 +65,17 @@ public final class IriParquetReader {
     }
 
     static IriRecord toRecord(StructAccessor row) {
-        String iri = row.getString(IriSchema.IRI);
         String userinfo = optionalString(row, IriSchema.USERINFO);
         String host = optionalString(row, IriSchema.HOST);
         Integer port = row.isNull(IriSchema.PORT) ? null : row.getInt(IriSchema.PORT);
-        IriParts parts = new IriParts(
+        return new IriRecord(new IriParts(
                 row.getString(IriSchema.SCHEME),
                 userinfo,
                 host,
                 port,
                 row.getString(IriSchema.PATH),
                 optionalString(row, IriSchema.QUERY),
-                optionalString(row, IriSchema.FRAGMENT));
-        return new IriRecord(iri, parts);
+                optionalString(row, IriSchema.FRAGMENT)));
     }
 
     private static String optionalString(StructAccessor row, int index) {

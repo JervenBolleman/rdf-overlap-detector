@@ -2,6 +2,7 @@ package swiss.sib.rdfoverlap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
@@ -112,5 +113,19 @@ class IriPartsTest {
             "http://h:99999999999/"})
     void rejectsInputWeCannotDecompose(String iri) {
         assertThrows(IllegalArgumentException.class, () -> IriParts.parse(iri), iri);
+    }
+
+    /** Parts compare by components, and rebuild the IRI text, except for an empty port, which is the default. */
+    @Test
+    void partsRebuildTheirIriTextAndCompareByComponents() {
+        String[] iris = {"http://h/a/b/c?x#y", "https://user:pw@host:8443/x", "http://[2001:db8::1]:8080/",
+                "http://@h/", "file:///etc/hosts", "urn:example:animal", "http://h/a%20b%2Fc?q=%7E",
+                "http://例子.example/路径?q=é#ф", "http://h/p?#"};
+        for (String iri : iris) {
+            assertEquals(iri, IriParts.parse(iri).toIri(), iri);
+        }
+        assertEquals("http://h/x", IriParts.parse("http://h:/x").toIri(), "empty port is the default");
+        assertTrue(IriParts.parse("http://a/x").compareTo(IriParts.parse("http://b/x")) < 0);
+        assertTrue(IriParts.parse("http://h/x").compareTo(IriParts.parse("http://h/x?q")) < 0, "absent sorts first");
     }
 }

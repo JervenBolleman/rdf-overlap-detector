@@ -41,7 +41,7 @@ class IriExtractorTest {
         assertEquals(3, summary.statements(), name);
         assertEquals(2, summary.predicates(), name);
         assertEquals(0, summary.rejectedIris(), name);
-        assertEquals(SAMPLE_IRIS, readIris(summary.runs()), name);
+        assertEquals(SAMPLE_IRIS, readIris(List.of(summary.output())), name);
     }
 
     @Test
@@ -49,7 +49,7 @@ class IriExtractorTest {
         Path input = Path.of("src/test/resources/samples/same-document.rdf");
         IriExtractor.ExtractionSummary summary = new IriExtractor(dir.resolve("same-document")).extract(input);
 
-        List<String> iris = readIris(summary.runs());
+        List<String> iris = readIris(List.of(summary.output()));
         assertEquals(2, iris.size());
         assertTrue(iris.contains("http://example.org/o1"));
         assertTrue(iris.stream().anyMatch(i -> i.startsWith("file:") && i.endsWith("same-document.rdf")), iris.toString());
@@ -85,7 +85,7 @@ class IriExtractorTest {
         IriExtractor.ExtractionSummary summary = new IriExtractor(dir.resolve("long-literal")).extract(input);
 
         assertEquals(2, summary.statements());
-        assertEquals(List.of("http://example.org/o", "http://example.org/s"), readIris(summary.runs()));
+        assertEquals(List.of("http://example.org/o", "http://example.org/s"), readIris(List.of(summary.output())));
     }
 
     /** Copies one sample into a directory, keeping its name. */
@@ -111,8 +111,8 @@ class IriExtractorTest {
         List<String> skippedNames = summary.skipped().stream().map(s -> Path.of(s.source()).getFileName().toString()).toList();
         assertEquals(List.of("broken.nt", "notes.txt"), skippedNames);
         assertTrue(summary.skipped().stream().allMatch(s -> !s.reason().isEmpty()));
-        // Both good files contribute their four IRIs, so the same IRIs appear twice before sorting.
-        assertEquals(8, readIris(summary.runs()).size());
+        // Both good files contribute the same four IRIs, so the output holds four.
+        assertEquals(4, summary.distinctIris());
     }
 
     @Test
@@ -127,7 +127,7 @@ class IriExtractorTest {
         assertEquals(0, second.skipped().size(), second.skipped().toString());
         assertEquals(1, second.files());
         assertEquals(first.statements(), second.statements());
-        assertEquals(readIris(first.runs()), readIris(second.runs()));
+        assertEquals(readIris(List.of(first.output())), readIris(List.of(second.output())));
     }
 
     @Test
@@ -141,7 +141,7 @@ class IriExtractorTest {
         IriExtractor.ExtractionSummary again = new IriExtractor(ds).extract(input);
 
         assertFalse(Files.exists(ds.resolve("runs").resolve("stale.parquet")));
-        assertEquals(1, again.runs().size());
+        assertTrue(Files.exists(again.output()));
     }
 
     @Test
@@ -154,7 +154,7 @@ class IriExtractorTest {
 
         assertEquals(0, summary.files());
         assertEquals(1, summary.skipped().size());
-        assertEquals(0, summary.runs().size());
+        assertEquals(0, summary.distinctIris());
         assertEquals(0, summary.predicates());
     }
 
@@ -170,34 +170,33 @@ class IriExtractorTest {
     void exactlyOneBatchOfTenThousandGivesOneRun() throws IOException {
         IriExtractor.ExtractionSummary summary = extractSelfLoops(10_000, IriExtractor.DEFAULT_BATCH_SIZE, "exact");
 
-        assertEquals(1, summary.runs().size());
-        assertEquals(10_000, rowCount(summary.runs().get(0)));
+        assertEquals(1, summary.batches());
+        assertEquals(10_000, summary.distinctIris());
+        assertEquals(10_000, rowCount(summary.output()));
     }
 
     @Test
-    void tenThousandAndOneGivesTwoRuns() throws IOException {
+    void tenThousandAndOneGivesTwoBatches() throws IOException {
         IriExtractor.ExtractionSummary summary = extractSelfLoops(10_001, IriExtractor.DEFAULT_BATCH_SIZE, "plusone");
 
-        assertEquals(2, summary.runs().size());
-        assertEquals(10_000, rowCount(summary.runs().get(0)));
-        assertEquals(1, rowCount(summary.runs().get(1)));
+        assertEquals(2, summary.batches());
+        assertEquals(10_001, summary.distinctIris());
+        assertEquals(10_001, rowCount(summary.output()));
     }
 
     @Test
-    void eachRunIsSortedAndHasOneRowGroup() throws IOException {
+    void outputIsSortedAndHasOneRowGroupForASmallDataset() throws IOException {
         IriExtractor.ExtractionSummary summary = extractSelfLoops(10_001, IriExtractor.DEFAULT_BATCH_SIZE, "sorted");
 
-        for (Path run : summary.runs()) {
-            List<String> iris = readIris(List.of(run));
-            List<String> sorted = new ArrayList<>(iris);
-            sorted.sort(null);
-            assertEquals(sorted, iris, run.toString());
-            assertEquals(1, IriParquetReader.rowGroupCount(run), run.toString());
-        }
+        List<String> iris = readIris(List.of(summary.output()));
+        List<String> sorted = new ArrayList<>(iris);
+        sorted.sort(null);
+        assertEquals(sorted, iris);
+        assertEquals(1, IriParquetReader.rowGroupCount(summary.output()));
     }
 
     @Test
-    void duplicatesAcrossBatchesAreKeptForTheSortPhase() throws IOException {
+    void duplicatesAcrossBatchesCollapseInTheOutput() throws IOException {
         // Batch size 2. The first batch holds a and b. The second triple's a is still in that open batch, so it
         // collapses. Then c arrives, the batch is full, and it is flushed. The second batch is b and c.
         Path input = writeNTriples("dup-across.nt",
@@ -207,9 +206,8 @@ class IriExtractorTest {
 
         IriExtractor.ExtractionSummary summary = new IriExtractor(dir.resolve("dup-across"), 2).extract(input);
 
-        assertEquals(2, summary.runs().size());
-        assertEquals(List.of("http://ex/a", "http://ex/b", "http://ex/b", "http://ex/c"),
-                readIris(summary.runs()));
+        assertEquals(2, summary.batches());
+        assertEquals(List.of("http://ex/a", "http://ex/b", "http://ex/c"), readIris(List.of(summary.output())));
     }
 
     @Test
@@ -222,8 +220,33 @@ class IriExtractorTest {
         IriExtractor.ExtractionSummary summary = new IriExtractor(dir.resolve("dup-within")).extract(input);
 
         assertEquals(3, summary.statements());
-        assertEquals(1, summary.runs().size());
-        assertEquals(List.of("http://ex/a"), readIris(summary.runs()));
+        assertEquals(1, summary.batches());
+        assertEquals(List.of("http://ex/a"), readIris(List.of(summary.output())));
+    }
+
+    @Test
+    void hierarchicalMergingWithASmallFanInLeavesOnlyTheOutput() throws IOException {
+        // Fan-in 2 and batches of one IRI: every IRI is its own run, so the pool has to merge in several levels.
+        Path input = dir.resolve("chain.nt");
+        try (PrintWriter w = new PrintWriter(Files.newBufferedWriter(input))) {
+            for (int i = 8; i >= 0; i--) {
+                w.printf("<http://ex/i%d> <http://ex/p> <http://ex/i%d> .%n", i, i);
+            }
+            w.printf("<http://ex/i3> <http://ex/p> <http://ex/i3> .%n");
+        }
+        Path ds = dir.resolve("chain");
+
+        IriExtractor.ExtractionSummary summary = new IriExtractor(ds, 1, 2).extract(input);
+
+        List<String> expected = new ArrayList<>();
+        for (int i = 0; i <= 8; i++) {
+            expected.add("http://ex/i" + i);
+        }
+        assertEquals(expected, readIris(List.of(summary.output())));
+        assertEquals(9, summary.distinctIris());
+        try (var files = Files.list(ds.resolve("runs"))) {
+            assertEquals(0, files.count(), "every run and merged file is removed once merged");
+        }
     }
 
     @Test
@@ -234,7 +257,7 @@ class IriExtractorTest {
 
         IriExtractor.ExtractionSummary summary = new IriExtractor(dir.resolve("bnode-literal")).extract(input);
 
-        assertEquals(List.of("http://ex/o", "http://ex/s"), readIris(summary.runs()));
+        assertEquals(List.of("http://ex/o", "http://ex/s"), readIris(List.of(summary.output())));
     }
 
     @Test
@@ -247,10 +270,9 @@ class IriExtractorTest {
 
         assertEquals(0, summary.rejectedIris());
         List<IriRecord> records = new ArrayList<>();
-        for (Path run : summary.runs()) {
-            IriParquetReader.forEach(run, records::add);
-        }
-        IriRecord hostIri = records.stream().filter(r -> r.iri().equals("http://h:/x")).findFirst().orElseThrow();
+        IriParquetReader.forEach(summary.output(), records::add);
+        // The empty port is the scheme's default, so it is not kept. The record is the host and the path.
+        IriRecord hostIri = records.stream().filter(r -> "h".equals(r.parts().host())).findFirst().orElseThrow();
         assertEquals("h", hostIri.parts().host());
         assertNull(hostIri.parts().port());
     }

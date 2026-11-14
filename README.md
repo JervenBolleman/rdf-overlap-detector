@@ -44,7 +44,7 @@ then loads it. Gzip, xz and zstd input are decompressed by the libraries directl
 includes them.
 
 Status: built and run on Linux x86_64 with GraalVM 25. The sample directory extracts, including the zstd, xz and gzip
-samples, and `sort` and `overlap` work on the output. The release workflow's macOS and Windows builds have not been
+samples, and `overlap` works on the output. The release workflow's macOS and Windows builds have not been
 run yet, and neither has the noexec fallback.
 
 ## Continuous integration and releases
@@ -76,15 +76,14 @@ java -jar target/rdf-overlap-detector-0.1.0-SNAPSHOT.jar <command> [arguments]
 
 | Command | Arguments | What it does |
 | --- | --- | --- |
-| `extract` | `<input> <datasetDir>` | Reads RDF from a file, a directory, an http(s) or ssh URL, or a Metalink file, and writes the IRIs as sorted run files under `<datasetDir>/runs/`, and the predicates under `<datasetDir>/predicates/`. |
-| `sort` | `<datasetDir>` | Merges the runs into `<datasetDir>/iris/iris.parquet`, sorted with no duplicates, then deletes `runs/`. |
+| `extract` | `<input> <datasetDir>` | Reads RDF from a file, a directory, an http(s) or ssh URL, or a Metalink file, and writes one sorted, deduplicated IRI file to `<datasetDir>/iris/iris.parquet`. Runs are merged in the background while extraction continues. |
 | `overlap` | `[--void-base=IRI] <outDir> <datasetDir> <datasetDir> [...]` | Compares every pair of sorted datasets and writes the results to `<outDir>`. |
 | `help` | | Prints the usage. |
 
 The name of a dataset is the name of its directory. Use names made only of letters, digits, `.`, `_` and `-`.
 
 Exit codes: `0` on success, `1` for a usage error, `3` when a step fails (for example, a parse error on a single file
-or a missing `runs/` directory).
+or a failed merge).
 
 When the input is a directory, every regular file below it is tried, in sorted order. A file that does not parse as
 RDF is skipped. Its name and the reason are printed to stderr as `skipped (not RDF): ...`, and extraction carries on.
@@ -103,10 +102,8 @@ extraction replaces the output of the previous one.
 JAR=target/rdf-overlap-detector-0.1.0-SNAPSHOT.jar
 
 java -jar $JAR extract rhea.rdf.gz work/rhea
-java -jar $JAR sort work/rhea
 
 java -jar $JAR extract BSBM.ttl.xz work/BSBM
-java -jar $JAR sort work/BSBM
 
 java -jar $JAR overlap --void-base=https://example.org/void/ results work/rhea work/BSBM
 ```
@@ -118,7 +115,7 @@ rhea BSBM ranges=10/92 sharedRanges=0 sharedIris=0
 void description: results/void.ttl
 ```
 
-Extract and sort each dataset once. After that you can compare any set of datasets without redoing them.
+Extract each dataset once. After that you can compare any set of datasets without redoing it.
 
 ## Input formats
 
@@ -147,7 +144,7 @@ at parse time, so the count is usually zero.
 
 ```
 <datasetDir>/
-  runs/                      temporary, removed by sort
+  runs/                      temporary, merged into iris/ and removed
   predicates/predicates.parquet
   iris/iris.parquet          sorted, distinct IRIs with their components
 
@@ -157,7 +154,8 @@ at parse time, so the count is usually zero.
   void.ttl                   VoID description of the datasets and their overlaps
 ```
 
-Each IRI row stores the full IRI and its RFC 3986 components: scheme, userinfo, host, port, path, query and fragment.
+Each IRI row stores its RFC 3986 components: scheme, userinfo, host, port, path, query and fragment. The IRI text is
+rebuilt from them. An empty port is the default for the scheme, so it is not kept.
 Components keep their exact text, with no percent-decoding, so equal IRIs always have equal rows.
 
 A pair file has one row per shared range, with the columns `range`, `count_first`, `count_second` and `shared_iris`.
@@ -194,7 +192,8 @@ namespace you control to get resolvable IRIs.
 
 ## Running on large files
 
-- **Memory:** the extract and sort steps stream the data. The overlap step keeps one entry per range per dataset in
+- **Memory:** extraction streams the data. Runs are merged 16 at a time, in a background thread, so at most 16 run files
+  are open in one merge. The overlap step keeps one entry per range per dataset in
   memory. Use `-Xmx` to set the heap size, for example `java -Xmx4g -jar ...`.
 - **Temporary directory:** the zstd and snappy libraries unpack native code into `java.io.tmpdir`. Hardwood writes
   zstd by default. If that directory is not writable, extraction fails with
@@ -210,7 +209,7 @@ namespace you control to get resolvable IRIs.
 - Only the default range depth (2) and batch size (10,000) are available from the command line. Fan-in for merging
   is 64.
 - Predicates are collected in memory. A dataset with very many distinct predicates would need more memory.
-- The overlap results depend on the depth setting. Changing the depth means running `overlap` again, not `sort`.
+- The overlap results depend on the depth setting. Changing the depth means running `overlap` again, not `extract`.
 - Results are tested on datasets up to about two million statements. Behaviour on much larger inputs has not been
   measured. See `PLAN.md` for the design and the measurements.
 

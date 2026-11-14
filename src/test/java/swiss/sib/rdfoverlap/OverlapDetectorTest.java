@@ -124,9 +124,9 @@ class OverlapDetectorTest {
                 "http://h/c/1", "urn:x:1");
         Path a = dataset(dir.resolve("data"), "a", iris.toArray(String[]::new));
 
-        java.util.Map<String, Long> expected = new java.util.TreeMap<>();
+        java.util.Map<RangeKey.Range, Long> expected = new java.util.TreeMap<>();
         for (String iri : iris) {
-            expected.merge(RangeKey.of(iri, 2), 1L, Long::sum);
+            expected.merge(RangeKey.of(IriParts.parse(iri), 2), 1L, Long::sum);
         }
 
         assertEquals(expected, new OverlapDetector(2).rangeCounts(a.resolve("iris").resolve("iris.parquet")));

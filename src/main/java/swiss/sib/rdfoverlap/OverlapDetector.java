@@ -58,7 +58,7 @@ public final class OverlapDetector {
      * @param countSecond IRIs of the second dataset in the range
      * @param sharedIris  IRIs both datasets have in the range
      */
-    record SharedRange(String range, long countFirst, long countSecond, long sharedIris) {
+    record SharedRange(RangeKey.Range range, long countFirst, long countSecond, long sharedIris) {
     }
 
     /**
@@ -112,7 +112,7 @@ public final class OverlapDetector {
 
         List<String> names = new ArrayList<>();
         List<Path> irisFiles = new ArrayList<>();
-        List<TreeMap<String, Long>> ranges = new ArrayList<>();
+        List<TreeMap<RangeKey.Range, Long>> ranges = new ArrayList<>();
         for (Path dir : datasetDirs) {
             String name = dir.getFileName().toString();
             if (!NAME.matcher(name).matches()) {
@@ -141,7 +141,7 @@ public final class OverlapDetector {
         writeSummary(summaries, outDir.resolve("summary.csv"));
 
         List<Long> totals = new ArrayList<>();
-        for (TreeMap<String, Long> map : ranges) {
+        for (TreeMap<RangeKey.Range, Long> map : ranges) {
             totals.add(map.values().stream().mapToLong(Long::longValue).sum());
         }
         VoidWriter.write(outDir.resolve("void.ttl"), voidBase, names, totals, results);
@@ -149,31 +149,31 @@ public final class OverlapDetector {
     }
 
     /** Counts the IRIs of one sorted IRI file in each range. Returns a map sorted by range key. */
-    TreeMap<String, Long> rangeCounts(Path irisFile) throws IOException {
-        TreeMap<String, Long> counts = new TreeMap<>();
+    TreeMap<RangeKey.Range, Long> rangeCounts(Path irisFile) throws IOException {
+        TreeMap<RangeKey.Range, Long> counts = new TreeMap<>();
         try (RunCursor cursor = new RunCursor(irisFile)) {
             while (cursor.current() != null) {
-                counts.merge(RangeKey.of(cursor.current().iri(), depth), 1L, Long::sum);
+                counts.merge(RangeKey.of(cursor.current().parts(), depth), 1L, Long::sum);
                 cursor.advance();
             }
         }
         return counts;
     }
 
-    private PairResult comparePair(String nameA, String nameB, TreeMap<String, Long> rangesA,
-                                   TreeMap<String, Long> rangesB, Path irisA, Path irisB, Path outDir)
+    private PairResult comparePair(String nameA, String nameB, TreeMap<RangeKey.Range, Long> rangesA,
+                                   TreeMap<RangeKey.Range, Long> rangesB, Path irisA, Path irisB, Path outDir)
             throws IOException {
-        List<String> shared = new ArrayList<>();
-        for (String range : rangesA.keySet()) {
+        List<RangeKey.Range> shared = new ArrayList<>();
+        for (RangeKey.Range range : rangesA.keySet()) {
             if (rangesB.containsKey(range)) {
                 shared.add(range);
             }
         }
-        Map<String, Long> sharedIris = sharedIrisByRange(irisA, irisB);
+        Map<RangeKey.Range, Long> sharedIris = sharedIrisByRange(irisA, irisB);
 
         List<SharedRange> sharedRanges = new ArrayList<>();
         long total = 0;
-        for (String range : shared) {
+        for (RangeKey.Range range : shared) {
             long common = sharedIris.getOrDefault(range, 0L);
             sharedRanges.add(new SharedRange(range, rangesA.get(range), rangesB.get(range), common));
             total += common;
@@ -194,17 +194,17 @@ public final class OverlapDetector {
     }
 
     /** Streams two sorted IRI files together and counts the IRIs they have in common, per range. */
-    Map<String, Long> sharedIrisByRange(Path irisA, Path irisB) throws IOException {
-        Map<String, Long> counts = new HashMap<>();
+    Map<RangeKey.Range, Long> sharedIrisByRange(Path irisA, Path irisB) throws IOException {
+        Map<RangeKey.Range, Long> counts = new HashMap<>();
         try (RunCursor a = new RunCursor(irisA); RunCursor b = new RunCursor(irisB)) {
             while (a.current() != null && b.current() != null) {
-                int order = a.current().iri().compareTo(b.current().iri());
+                int order = a.current().compareTo(b.current());
                 if (order < 0) {
                     a.advance();
                 } else if (order > 0) {
                     b.advance();
                 } else {
-                    counts.merge(RangeKey.of(a.current().iri(), depth), 1L, Long::sum);
+                    counts.merge(RangeKey.of(a.current().parts(), depth), 1L, Long::sum);
                     a.advance();
                     b.advance();
                 }

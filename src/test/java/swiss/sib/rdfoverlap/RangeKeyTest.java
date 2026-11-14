@@ -42,6 +42,33 @@ class RangeKeyTest {
         }
     }
 
+    /** The range from parts must be the range from the text, for every IRI shape the tool keeps. */
+    @Test
+    void partsRangeMatchesTextRange() {
+        String[] iris = {"http://h/a/b/c", "http://h/a/1", "http://h/a/b", "http://h/x", "http://h", "http://h/",
+                "http://h/a/b/c?x/y", "http://h/a/b#f/g", "http://u:pw@h:8080/a/b/c", "file:///etc/hosts",
+                "urn:isbn:1", "mailto:x@example.org", "http://[::1]:8080/a/b/"};
+        for (String iri : iris) {
+            for (int depth = 0; depth <= 3; depth++) {
+                IriParts parts = IriParts.parse(iri);
+                assertEquals(RangeKey.of(iri, depth), RangeKey.of(parts, depth).toString(), iri + " depth " + depth);
+            }
+        }
+    }
+
+    /** Two IRIs in the same range give equal, equally hashed range keys, and no string is built to compare them. */
+    @Test
+    void rangesCompareAndHashOnComponents() {
+        RangeKey.Range a = RangeKey.of(IriParts.parse("http://h/a/b/c"), 2);
+        RangeKey.Range b = RangeKey.of(IriParts.parse("http://h/a/b/zzz"), 2);
+        RangeKey.Range c = RangeKey.of(IriParts.parse("http://h/a/c/c"), 2);
+
+        assertEquals(a, b);
+        assertEquals(a.hashCode(), b.hashCode());
+        assertTrue(a.compareTo(c) < 0);
+        assertTrue(c.compareTo(a) > 0);
+    }
+
     @Test
     void rejectsNegativeDepthAndMissingScheme() {
         assertThrows(IllegalArgumentException.class, () -> RangeKey.of("http://h/a", -1));

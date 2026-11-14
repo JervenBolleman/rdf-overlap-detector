@@ -46,7 +46,6 @@ class MainTest {
         Result r = run("--help");
         assertEquals(0, r.code);
         assertTrue(r.out.contains("extract"));
-        assertTrue(r.out.contains("sort"));
         assertTrue(r.out.contains("overlap"));
     }
 
@@ -61,7 +60,6 @@ class MainTest {
     void overlapComparesExtractedAndSortedDatasets(@TempDir Path dir) {
         for (String name : new String[] {"a", "b"}) {
             assertEquals(0, run("extract", "src/test/resources/samples/sample.nt.xz", dir.resolve(name).toString()).code);
-            assertEquals(0, run("sort", dir.resolve(name).toString()).code);
         }
         Result r = run("overlap", dir.resolve("out").toString(), dir.resolve("a").toString(), dir.resolve("b").toString());
         assertEquals(0, r.code, r.err);
@@ -75,7 +73,6 @@ class MainTest {
     void overlapAcceptsAVoidBaseOption(@TempDir Path dir) {
         for (String name : new String[] {"a", "b"}) {
             assertEquals(0, run("extract", "src/test/resources/samples/sample.nt.xz", dir.resolve(name).toString()).code);
-            assertEquals(0, run("sort", dir.resolve(name).toString()).code);
         }
         Result r = run("overlap", "--void-base=https://example.org/void/", dir.resolve("out").toString(),
                 dir.resolve("a").toString(), dir.resolve("b").toString());
@@ -88,22 +85,6 @@ class MainTest {
         Result r = run("overlap", "out", "only-one");
         assertEquals(1, r.code);
         assertTrue(r.err.contains("usage: rdf-overlap-detector overlap"));
-    }
-
-    @Test
-    void sortMergesTheRunsOfAnExtractedDataset(@TempDir Path dir) {
-        assertEquals(0, run("extract", "src/test/resources/samples/sample.nt.xz", dir.toString()).code);
-        Result r = run("sort", dir.toString());
-        assertEquals(0, r.code, r.err);
-        assertTrue(r.out.contains("distinctIris=4"), r.out);
-        assertTrue(Files.exists(dir.resolve("iris").resolve("iris.parquet")));
-    }
-
-    @Test
-    void sortNeedsOneArgument() {
-        Result r = run("sort");
-        assertEquals(1, r.code);
-        assertTrue(r.err.contains("usage: rdf-overlap-detector sort"));
     }
 
     @Test
@@ -121,7 +102,6 @@ class MainTest {
         assertEquals(0, r.code, r.err);
         assertTrue(r.out.contains("files=17"), r.out);
         assertTrue(r.out.contains("skipped=0"), r.out);
-        assertEquals(0, run("sort", dir.toString()).code);
         assertTrue(Files.exists(dir.resolve("iris").resolve("iris.parquet")));
     }
 

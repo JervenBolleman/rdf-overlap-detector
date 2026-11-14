@@ -1,5 +1,6 @@
 package swiss.sib.rdfoverlap;
 
+import java.util.Comparator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -12,6 +13,12 @@ import java.util.regex.Pattern;
  * <p>{@code userinfo}, {@code host}, {@code port}, {@code query} and {@code fragment} are {@code null} when the
  * component is absent. An empty but present component is kept as the empty string, so {@code file:///x} has an
  * empty host and {@code http://h/?} has an empty query. The host keeps its brackets for IPv6 literals.
+ *
+ * <p>An empty port, as in {@code http://h:/x}, is treated as absent. It is the default port for the scheme, and
+ * the tool does not keep it. The IRI rebuilt from such parts is {@code http://h/x}.
+ *
+ * <p>Parts compare by their components in the order of the record, with nulls first. The comparison builds no
+ * string, which is why the merge and the deduplication use it instead of the IRI text.
  *
  * @param scheme   required, e.g. {@code http}
  * @param userinfo optional user information before the {@code @}
@@ -28,7 +35,49 @@ public record IriParts(
         Integer port,
         String path,
         String query,
-        String fragment) {
+        String fragment) implements Comparable<IriParts> {
+
+    private static final Comparator<IriParts> ORDER = Comparator
+            .comparing(IriParts::scheme)
+            .thenComparing(IriParts::userinfo, Comparator.nullsFirst(Comparator.naturalOrder()))
+            .thenComparing(IriParts::host, Comparator.nullsFirst(Comparator.naturalOrder()))
+            .thenComparing(IriParts::port, Comparator.nullsFirst(Comparator.naturalOrder()))
+            .thenComparing(IriParts::path)
+            .thenComparing(IriParts::query, Comparator.nullsFirst(Comparator.naturalOrder()))
+            .thenComparing(IriParts::fragment, Comparator.nullsFirst(Comparator.naturalOrder()));
+
+    @Override
+    public int compareTo(IriParts other) {
+        return ORDER.compare(this, other);
+    }
+
+    /**
+     * Rebuilds the IRI text from its parts. This allocates a string, so the hot paths compare parts instead.
+     *
+     * @return the IRI text, which equals the input except for an empty port, which is dropped
+     */
+    public String toIri() {
+        StringBuilder iri = new StringBuilder(scheme.length() + path.length() + 32);
+        iri.append(scheme).append(':');
+        if (host != null) {
+            iri.append("//");
+            if (userinfo != null) {
+                iri.append(userinfo).append('@');
+            }
+            iri.append(host);
+            if (port != null) {
+                iri.append(':').append(port);
+            }
+        }
+        iri.append(path);
+        if (query != null) {
+            iri.append('?').append(query);
+        }
+        if (fragment != null) {
+            iri.append('#').append(fragment);
+        }
+        return iri.toString();
+    }
 
     /** The regular expression of RFC 3986 appendix B, with the groups named for readability. */
     private static final Pattern RFC3986 = Pattern.compile(
