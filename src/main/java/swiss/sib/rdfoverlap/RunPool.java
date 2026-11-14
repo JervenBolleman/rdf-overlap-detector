@@ -41,6 +41,19 @@ final class RunPool {
 
     static final int DEFAULT_FAN_IN = 16;
 
+    /**
+     * The hard limit on files open at once, for the whole extraction. The limit is kept by capping the number of merges
+     * in flight. A merge opens {@code fanIn} inputs and one output, and {@link #RESERVED_FILES} stay free for the
+     * input being parsed and for everything else the process holds.
+     */
+    static final int MAX_OPEN_FILES = 768;
+    static final int RESERVED_FILES = 8;
+
+    /** The most merges that can run at once without exceeding {@link #MAX_OPEN_FILES}. */
+    static int maxConcurrentMerges(int fanIn) {
+        return Math.max(1, (MAX_OPEN_FILES - RESERVED_FILES) / (fanIn + 1));
+    }
+
     /** Merge threads by default: one fewer than the available cores, and one on a single-core machine. */
     static int defaultThreads() {
         int cores = Runtime.getRuntime().availableProcessors();
@@ -108,10 +121,15 @@ final class RunPool {
         this.output = output;
         this.fanIn = fanIn;
         this.rowGroupRows = rowGroupRows;
-        this.threads = threads;
+        this.threads = Math.min(threads, maxConcurrentMerges(fanIn));
         this.coordinator = new Thread(this::coordinate, "iri-run-coordinator");
         this.coordinator.setDaemon(true);
         this.coordinator.start();
+    }
+
+    /** The number of merges that can run at once, after the cap for {@link #MAX_OPEN_FILES}. */
+    int threads() {
+        return threads;
     }
 
     /** Hands a run written for an input file to the pool. */

@@ -2,6 +2,7 @@ package swiss.sib.rdfoverlap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -118,6 +119,19 @@ class IriMergerTest {
             assertEquals(expected.size(), pool.finish(), "threads " + threads);
             assertEquals(expected, readIris(out), "threads " + threads);
             assertEquals(0, filesIn(runs), "threads " + threads);
+        }
+    }
+
+    /** However many threads are asked for, the merges in flight never open more than the hard limit of files. */
+    @Test
+    void mergesNeverOpenMoreThanTheHardLimit() throws IOException {
+        RunPool pool = new RunPool(dir.resolve("runs"), dir.resolve("iris.parquet"), 16, 1_000_000, 10_000);
+        try {
+            assertEquals(RunPool.maxConcurrentMerges(16), pool.threads());
+            assertTrue(pool.threads() * (16 + 1) + RunPool.RESERVED_FILES <= RunPool.MAX_OPEN_FILES);
+            assertEquals(44, RunPool.maxConcurrentMerges(16));
+        } finally {
+            pool.abort();
         }
     }
 

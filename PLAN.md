@@ -329,3 +329,12 @@ held every one open, which broke the open-file limit.
   about 112 on an 8-core machine. The 300,000-IRI test passed under limits of 64 and 128, but it does not reach the
   worst case, because its 60 runs rarely overlap at full width.
 - Memory: each concurrent merge holds its own output row group, of up to 1,000,000 rows.
+
+## Hard limit of 768 open files
+
+- `RunPool.MAX_OPEN_FILES` is 768. A merge opens 17 files (16 inputs and its output). Eight are reserved for the input
+  being parsed and for the rest of the process, so 760 / 17 gives at most 44 merges at once.
+- The thread count is capped at that number, so no setting of threads can exceed the limit. The cap is checked in a test.
+- Merges combine the 16 smallest runs of a scope. A scope is one input file, or the shared pool. Smallest-first keeps
+  the merged files of similar size, so the merges form levels of 16, but a level is not strictly enforced. A file's
+  leftover runs that are fewer than 16 can join the shared pool and merge with runs of other levels.
