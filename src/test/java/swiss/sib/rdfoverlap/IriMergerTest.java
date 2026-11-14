@@ -96,6 +96,37 @@ class IriMergerTest {
         assertEquals(0, filesIn(runs), "every run and intermediate merge is removed");
     }
 
+    /** Several merges at once, on several threads, must give the same result as one at a time. */
+    @Test
+    void poolWithManyThreadsGivesTheSameResult() throws IOException {
+        for (int threads : new int[] {1, 4}) {
+            Path runs = dir.resolve("runs-" + threads);
+            Path out = dir.resolve("iris-" + threads + ".parquet");
+            RunPool pool = new RunPool(runs, out, 2, 1_000_000, threads);
+            List<String> expected = new ArrayList<>();
+            for (int file = 1; file <= 6; file++) {
+                for (int run = 1; run <= 5; run++) {
+                    String iri = "http://ex/" + file + "-" + run;
+                    pool.run(file, run(runs.resolve("f" + file + "-" + run + ".parquet"), iri, "http://ex/shared"));
+                    expected.add(iri);
+                }
+                pool.commit(file);
+            }
+            expected.add("http://ex/shared");
+            expected.sort(null);
+
+            assertEquals(expected.size(), pool.finish(), "threads " + threads);
+            assertEquals(expected, readIris(out), "threads " + threads);
+            assertEquals(0, filesIn(runs), "threads " + threads);
+        }
+    }
+
+    @Test
+    void defaultThreadsIsOneFewerThanTheCoresOrOne() {
+        int cores = Runtime.getRuntime().availableProcessors();
+        assertEquals(cores > 1 ? cores - 1 : 1, RunPool.defaultThreads());
+    }
+
     @Test
     void discardedFileLeavesNoRowsAndOthersAreUnaffected() throws IOException {
         Path runs = dir.resolve("runs");

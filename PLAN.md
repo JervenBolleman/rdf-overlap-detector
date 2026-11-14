@@ -319,3 +319,13 @@ held every one open, which broke the open-file limit.
   this tool, so the change is consistent.
 - Range overlap uses `RangeKey.Range`, which holds the parts and a prefix length. It compares and hashes on the
   components, and builds text only for output. The string form `RangeKey.of(String, int)` is kept and checked to agree.
+
+## Parallel merges
+
+- Merges run on `cores - 1` threads, or one thread on a single core (`RunPool.defaultThreads()`).
+- One coordinator thread owns all state. It takes the caller's runs, commits and discards, and the completion of
+  each merge, in order. Merges touch only their own inputs and output, so they need no locks.
+- Open files: each merge opens at most 16 inputs. The worst case is about 16 open files per merge thread, which is
+  about 112 on an 8-core machine. The 300,000-IRI test passed under limits of 64 and 128, but it does not reach the
+  worst case, because its 60 runs rarely overlap at full width.
+- Memory: each concurrent merge holds its own output row group, of up to 1,000,000 rows.

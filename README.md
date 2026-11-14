@@ -192,8 +192,9 @@ namespace you control to get resolvable IRIs.
 
 ## Running on large files
 
-- **Memory:** extraction streams the data. Runs are merged 16 at a time, in a background thread, so at most 16 run files
-  are open in one merge. The overlap step keeps one entry per range per dataset in
+- **Memory and open files:** extraction streams the data. Runs are merged 16 at a time, on background threads: one
+  fewer than the CPU cores, or one on a single core. Each merge opens at most 16 run files, so the worst case is
+  about 16 open files per merge thread. The overlap step keeps one entry per range per dataset in
   memory. Use `-Xmx` to set the heap size, for example `java -Xmx4g -jar ...`.
 - **Temporary directory:** the zstd and snappy libraries unpack native code into `java.io.tmpdir`. Hardwood writes
   zstd by default. If that directory is not writable, extraction fails with
