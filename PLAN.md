@@ -366,3 +366,11 @@ held every one open, which broke the open-file limit.
 - A run that fails keeps its state. Only `iris/iris.parquet` is absent until the extraction finishes.
 - Checked by killing a 400-file extraction mid-run: the resume gives the full result, 4,000,000 statements and 8,000,000
   distinct IRIs, and leaves no state or run files.
+
+## Logging and timing
+
+- SLF4J with `slf4j-simple`, configured in `simplelogger.properties`, which writes to stderr with a timestamp.
+- Each file logs `started`, then `done` with its elapsed time and statement and batch counts, or `skipped` with the time
+  and the reason. A file taken from the saved state logs `restored`.
+- Error messages moved from stderr to the log: skipped files, and failed extract or overlap runs. Usage text stays on
+  stderr.

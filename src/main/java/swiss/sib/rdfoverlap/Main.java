@@ -12,6 +12,8 @@ import java.util.List;
  */
 public final class Main {
 
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(Main.class);
+
     static final String USAGE = """
             usage: rdf-overlap-detector <command> [args]
 
@@ -82,7 +84,7 @@ public final class Main {
             out.println("void description: " + outDir.resolve("void.ttl"));
             return 0;
         } catch (IOException | IllegalArgumentException e) {
-            err.println("overlap failed: " + e.getMessage());
+            LOG.error("overlap failed: {}", e.getMessage(), e);
             return 3;
         }
     }
@@ -98,16 +100,13 @@ public final class Main {
         try {
             IriExtractor.ExtractionSummary summary =
                     new IriExtractor(Path.of(args[first + 1])).extract(args[first], resume);
-            for (IriExtractor.Skipped skip : summary.skipped()) {
-                err.println("skipped (not RDF): " + skip.source() + ": " + skip.reason());
-            }
             out.printf("files=%d skipped=%d statements=%d batches=%d predicates=%d distinctIris=%d rejectedIris=%d%n",
                     summary.files(), summary.skipped().size(), summary.statements(), summary.batches(),
                     summary.predicates(), summary.distinctIris(), summary.rejectedIris());
             out.println("sorted IRIs: " + summary.output());
             return 0;
         } catch (IOException | RDF4JException e) {
-            err.println("extract failed: " + e.getMessage());
+            LOG.error("extract failed: {}", e.getMessage(), e);
             return 3;
         }
     }

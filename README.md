@@ -89,6 +89,10 @@ is read again. A remote file cannot be checked for change, so it is trusted if i
 when the extraction finishes. A run that fails keeps its state, so it can be resumed. Only the output is absent until
 the extraction finishes, so the partial dataset is never read as complete.
 
+Progress is logged to stderr, with a timestamp, the level and the thread: `started` and `done` for each file, with the
+time it took, `skipped` for a file that is not RDF, and `restored` for a file taken from the saved state. A failure is
+logged as an error with its stack trace. The log format is set in `simplelogger.properties`.
+
 Exit codes: `0` on success, `1` for a usage error, `3` when a step fails (for example, a parse error on a single file
 or a failed merge).
 

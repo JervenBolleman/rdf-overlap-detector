@@ -17,6 +17,7 @@
     <hardwood.version>1.1.0.Beta2</hardwood.version>
     <junit.version>5.13.4</junit.version>
     <zstd-jni.version>1.5.7-9</zstd-jni.version>
+    <slf4j.version>2.0.20</slf4j.version>
   </properties>
 
   <dependencyManagement>
@@ -77,6 +78,17 @@
       <groupId>org.apache.commons</groupId>
       <artifactId>commons-compress</artifactId>
       <version>1.28.0</version>
+    </dependency>
+    <!-- Logging: the API, and a simple backend that writes to stderr, configured in simplelogger.properties. -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <version>${slf4j.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+      <version>${slf4j.version}</version>
     </dependency>
     <dependency>
       <groupId>org.tukaani</groupId>

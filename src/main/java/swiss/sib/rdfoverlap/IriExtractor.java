@@ -25,7 +25,10 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.concurrent.TimeUnit;
+import java.util.Locale;
 import java.util.stream.Stream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.Statement;
 import org.eclipse.rdf4j.model.impl.SimpleValueFactory;
@@ -63,6 +66,8 @@ import org.eclipse.rdf4j.rio.helpers.RDFInputDispatcher;
  * <p>Sorting uses {@link String#compareTo}, which is the same order the merge phase must use.
  */
 public final class IriExtractor {
+
+    private static final Logger LOG = LoggerFactory.getLogger(IriExtractor.class);
 
     public static final int DEFAULT_BATCH_SIZE = 10_000;
 
@@ -415,8 +420,11 @@ public final class IriExtractor {
                             Path stateDir, Map<String, ManifestStore.CompletedFile> done) throws IOException {
         ManifestStore.CompletedFile record = done.get(key);
         if (record != null) {
+            LOG.info("restored {} from the saved state", source.displayName());
             return restored(record, stateDir);
         }
+        long started = System.nanoTime();
+        LOG.info("started {}", source.displayName());
         String token = tokenOf(key);
         Collector collector = new Collector(index, token, pool, runsDir);
         try {
@@ -429,6 +437,7 @@ public final class IriExtractor {
             if (!lenient) {
                 throw e;
             }
+            LOG.warn("skipped {} after {}: not RDF: {}", source.displayName(), elapsed(started), reason(e));
             return FileResult.skippedWith(new Skipped(source.displayName(), reason(e)));
         }
         // The last partial batch is still in memory. Write it before the file counts as parsed.
@@ -439,8 +448,15 @@ public final class IriExtractor {
                 java.util.stream.Collectors.toCollection(TreeSet::new)));
         pool.commit(index, new ManifestStore.CompletedFile(key, collector.statements, collector.rejectedIris,
                 collector.batches, predicatesFile));
+        LOG.info("done {} in {}: {} statements, {} batches", source.displayName(), elapsed(started),
+                collector.statements, collector.batches);
         return new FileResult(collector.statements, collector.rejectedIris, collector.batches,
                 Set.copyOf(collector.predicates.values()), null);
+    }
+
+    /** The time since a start, in seconds, for a log message. */
+    private static String elapsed(long startNanos) {
+        return String.format(Locale.ROOT, "%.2f s", (System.nanoTime() - startNanos) / 1e9);
     }
 
     /** A source read completely in an earlier run: its counts and predicates come from the saved state. */
