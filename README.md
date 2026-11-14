@@ -64,7 +64,7 @@ java -jar target/rdf-overlap-detector-0.1.0-SNAPSHOT.jar <command> [arguments]
 
 | Command | Arguments | What it does |
 | --- | --- | --- |
-| `extract` | `<input> <datasetDir>` | Reads RDF from a file, a directory, an http(s) URL or a Metalink file, and writes the IRIs as sorted run files under `<datasetDir>/runs/`, and the predicates under `<datasetDir>/predicates/`. |
+| `extract` | `<input> <datasetDir>` | Reads RDF from a file, a directory, an http(s) or ssh URL, or a Metalink file, and writes the IRIs as sorted run files under `<datasetDir>/runs/`, and the predicates under `<datasetDir>/predicates/`. |
 | `sort` | `<datasetDir>` | Merges the runs into `<datasetDir>/iris/iris.parquet`, sorted with no duplicates, then deletes `runs/`. |
 | `overlap` | `[--void-base=IRI] <outDir> <datasetDir> <datasetDir> [...]` | Compares every pair of sorted datasets and writes the results to `<outDir>`. |
 | `help` | | Prints the usage. |
@@ -114,6 +114,10 @@ Extract and sort each dataset once. After that you can compare any set of datase
   extension can be followed by a compression suffix.
 - **Compression:** `.gz`, `.xz` or `.zst` on top of any of the syntaxes above, for example `rhea.rdf.gz`.
   Uncompressed files also work.
+- **SSH:** `ssh://[user@]host[:port]/absolute/path` streams a remote file. The system `ssh` client runs `cat` on the
+  host, so your `~/.ssh/config`, keys, agent, `known_hosts` and `ProxyJump` apply. Passwords are never asked for, so the
+  host key and key-based login must already be set up. Only absolute paths are supported, and the remote host needs a
+  POSIX shell and `cat`. A Metalink file can be read over ssh, and its entries can be ssh URLs.
 - **Remote files:** an http(s) URL is streamed, not saved to disk first. The compression and the format come from
   the last segment of the URL, so `https://example.org/dump.nt.gz` works.
 - **Base IRI:** relative references are resolved against the URI the file was read from, so references such as

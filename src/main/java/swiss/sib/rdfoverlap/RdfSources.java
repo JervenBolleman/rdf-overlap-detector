@@ -58,6 +58,15 @@ final class RdfSources {
         return lower.startsWith("http://") || lower.startsWith("https://");
     }
 
+    static boolean isSsh(String input) {
+        return input.toLowerCase(Locale.ROOT).startsWith("ssh://");
+    }
+
+    /** True for an input that is read over the network, by http(s) or ssh. */
+    static boolean isRemote(String input) {
+        return isHttp(input) || isSsh(input);
+    }
+
     static boolean isMetalink(String name) {
         String lower = name.toLowerCase(Locale.ROOT);
         return lower.endsWith(".meta4") || lower.endsWith(".metalink");
@@ -111,8 +120,134 @@ final class RdfSources {
                     throw new IOException("HTTP " + response.statusCode() + " for " + uri);
                 }
                 return response.body();
+            case "ssh":
+                return openSsh(uri);
             default:
                 throw new IOException("unsupported URL scheme in " + uri);
+        }
+    }
+
+    /** The ssh client to run. Set rdfoverlap.ssh to use another program, which is how the tests run without a server. */
+    private static String sshCommand() {
+        return System.getProperty("rdfoverlap.ssh", "ssh");
+    }
+
+    /**
+     * Streams a remote file by running {@code cat} on the host over ssh. The system ssh client is used, so the user's
+     * ssh_config, keys, agent and known_hosts apply. Passwords are never asked for, because BatchMode is set.
+     *
+     * <p>The ssh URL is {@code ssh://[user@]host[:port]/absolute/path}. The host and user names must be plain, so they
+     * cannot be read as ssh options. The path is quoted for the remote shell.
+     */
+    static InputStream openSsh(URI uri) throws IOException {
+        String host = uri.getHost();
+        String user = uri.getUserInfo();
+        int port = uri.getPort();
+        String path = uri.getPath();
+        if (host == null || !SSH_HOST.matcher(host).matches()) {
+            throw new IOException("invalid host in ssh URL: " + uri);
+        }
+        if (user != null && !SSH_USER.matcher(user).matches()) {
+            throw new IOException("invalid user in ssh URL: " + uri);
+        }
+        if (port != -1 && (port < 1 || port > 65535)) {
+            throw new IOException("invalid port in ssh URL: " + uri);
+        }
+        if (path == null || !path.startsWith("/") || path.length() == 1) {
+            throw new IOException("ssh URL needs an absolute path: " + uri);
+        }
+        List<String> command = new ArrayList<>(List.of(sshCommand(), "-o", "BatchMode=yes", "-o", "ConnectTimeout=30"));
+        if (port != -1) {
+            command.add("-p");
+            command.add(String.valueOf(port));
+        }
+        command.add(user == null ? host : user + "@" + host);
+        command.add("cat -- " + shellQuote(path));
+
+        Path stderr = Files.createTempFile("rdfoverlap-ssh-", ".err");
+        Process process;
+        try {
+            process = new ProcessBuilder(command).redirectError(stderr.toFile()).start();
+        } catch (IOException e) {
+            Files.deleteIfExists(stderr);
+            throw new IOException("cannot run " + sshCommand() + ": " + e.getMessage(), e);
+        }
+        process.getOutputStream().close();
+        return new SshInputStream(process, stderr);
+    }
+
+    private static final java.util.regex.Pattern SSH_HOST =
+            java.util.regex.Pattern.compile("[A-Za-z0-9][A-Za-z0-9.-]*");
+    private static final java.util.regex.Pattern SSH_USER =
+            java.util.regex.Pattern.compile("[A-Za-z0-9_][A-Za-z0-9._-]*");
+
+    /** Quotes a path for a POSIX shell, so spaces and quotes in the path stay literal. */
+    static String shellQuote(String path) {
+        return "'" + path.replace("'", "'\\''") + "'";
+    }
+
+    /**
+     * The output of a remote command. Reaching the end of the output and then checking the exit status turns a failed
+     * command into a read error. Closing before the end stops the command, which is not an error.
+     */
+    static final class SshInputStream extends FilterInputStream {
+
+        private final Process process;
+        private final Path stderr;
+        private boolean atEnd;
+
+        SshInputStream(Process process, Path stderr) {
+            super(process.getInputStream());
+            this.process = process;
+            this.stderr = stderr;
+        }
+
+        @Override
+        public int read() throws IOException {
+            int b = super.read();
+            if (b < 0) {
+                atEnd = true;
+            }
+            return b;
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws IOException {
+            int n = super.read(buffer, offset, length);
+            if (n < 0) {
+                atEnd = true;
+            }
+            return n;
+        }
+
+        @Override
+        public void close() throws IOException {
+            try {
+                super.close();
+                if (!atEnd) {
+                    process.destroyForcibly();
+                }
+                int status = waitFor(process);
+                if (atEnd && status != 0) {
+                    throw new IOException("ssh exited with status " + status + ": " + stderrText());
+                }
+            } finally {
+                Files.deleteIfExists(stderr);
+            }
+        }
+
+        private String stderrText() throws IOException {
+            String text = Files.readString(stderr).strip();
+            return text.length() > 500 ? text.substring(0, 500) + "..." : text;
+        }
+
+        private static int waitFor(Process process) throws IOException {
+            try {
+                return process.waitFor();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("interrupted while waiting for ssh", e);
+            }
         }
     }
 

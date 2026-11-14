@@ -127,7 +127,7 @@ public final class IriExtractor {
      * @throws IOException if the input cannot be read, a file cannot be written, or a single input file is not RDF
      */
     public ExtractionSummary extract(String input) throws IOException {
-        if (RdfSources.isHttp(input)) {
+        if (RdfSources.isRemote(input)) {
             URI uri = URI.create(input);
             if (RdfSources.isMetalink(RdfSources.fileName(uri))) {
                 return run(RdfSources.readMetalink(uri), true);
@@ -233,11 +233,10 @@ public final class IriExtractor {
                         parser.setRDFHandler(collector);
                         parser.parse(stream, base);
                     });
-            if (!checksums.isEmpty()) {
-                // The parser may stop before the end of the file, so read the rest before comparing digests.
-                RdfSources.drain(in);
-                RdfSources.verify(checksums, digests);
-            }
+            // The parser may stop before the end of the file. Read the rest, so the digests cover the whole file, and
+            // so that an ssh command's failure is seen at the end of its output.
+            RdfSources.drain(in);
+            RdfSources.verify(checksums, digests);
         }
     }
 

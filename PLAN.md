@@ -253,3 +253,20 @@ input; re-running; a directory with no RDF; a single non-RDF file) and a CLI tes
 Covered by `RemoteExtractionTest`, which serves files from a local HTTP server. It tests a single remote URL, a
 Metalink 4 file with checksums, mirror fallback, relative URLs, a checksum mismatch, a 404, a parse error, and a
 Metalink 3 file.
+
+## SSH sources (added after Metalink)
+
+`extract` reads `ssh://[user@]host[:port]/absolute/path` by running the system `ssh` client, which runs `cat` on the
+host. The output is streamed into the parser, as for http.
+
+- The system client is used, so ssh_config, keys, agent, known_hosts and ProxyJump all apply. No SSH library is
+  bundled. `BatchMode=yes` means a password prompt fails rather than hangs.
+- The host and user are checked against plain-name patterns, so they cannot be read as ssh options. The path is quoted
+  for the remote shell, so quotes and spaces stay literal.
+- The stream is read to its end, and then the exit status is checked. A failed command is a read error, and so it is a
+  skipped file in a Metalink, directory or sort run, and an error for a single URL.
+- Closing the stream early stops the command, and that is not an error.
+- The client is overridable with `-Drdfoverlap.ssh=...`. The tests use a stand-in client that runs the remote command
+  in the local shell, so the quoting and streaming are tested without a server. These tests are skipped on Windows.
+
+Not done: directory listing over ssh, and paths relative to the home directory (for example `~/data`).
