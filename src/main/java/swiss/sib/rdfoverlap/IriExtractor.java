@@ -25,6 +25,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Locale;
 import java.util.stream.Stream;
 import org.slf4j.Logger;
@@ -250,6 +251,7 @@ public final class IriExtractor {
         }
         List<Map.Entry<String, RdfSource>> inputs = new ArrayList<>(unique.entrySet());
         Map<String, ManifestStore.CompletedFile> done = new HashMap<>();
+        Progress progress = new Progress(inputs.size());
         for (ManifestStore.CompletedFile c : initial.completed()) {
             done.put(c.key(), c);
         }
@@ -274,7 +276,8 @@ public final class IriExtractor {
                 String key = inputs.get(i).getKey();
                 RdfSource source = inputs.get(i).getValue();
                 int index = i;
-                results.add(readers.submit(() -> read(source, key, index, lenient, pool, runsDir, stateDir, done)));
+                results.add(readers.submit(() -> read(source, key, index, lenient, pool, runsDir, stateDir, done,
+                        progress)));
             }
             for (int i = 0; i < results.size(); i++) {
                 if (i == failAfterFiles) {
@@ -417,14 +420,16 @@ public final class IriExtractor {
      * as skipped. A failure to write output is always thrown.
      */
     private FileResult read(RdfSource source, String key, int index, boolean lenient, RunPool pool, Path runsDir,
-                            Path stateDir, Map<String, ManifestStore.CompletedFile> done) throws IOException {
+                            Path stateDir, Map<String, ManifestStore.CompletedFile> done, Progress progress)
+            throws IOException {
         ManifestStore.CompletedFile record = done.get(key);
         if (record != null) {
-            LOG.info("restored {} from the saved state", source.displayName());
+            progress.startFile();
+            LOG.info("restored {} from the saved state ({})", source.displayName(), progress.finishFile());
             return restored(record, stateDir);
         }
         long started = System.nanoTime();
-        LOG.info("started {}", source.displayName());
+        LOG.info("started {} ({})", source.displayName(), progress.startFile());
         String token = tokenOf(key);
         Collector collector = new Collector(index, token, pool, runsDir);
         try {
@@ -437,7 +442,8 @@ public final class IriExtractor {
             if (!lenient) {
                 throw e;
             }
-            LOG.warn("skipped {} after {}: not RDF: {}", source.displayName(), elapsed(started), reason(e));
+            LOG.warn("skipped {} after {}: not RDF: {} ({})", source.displayName(), elapsed(started), reason(e),
+                    progress.finishFile());
             return FileResult.skippedWith(new Skipped(source.displayName(), reason(e)));
         }
         // The last partial batch is still in memory. Write it before the file counts as parsed.
@@ -448,8 +454,8 @@ public final class IriExtractor {
                 java.util.stream.Collectors.toCollection(TreeSet::new)));
         pool.commit(index, new ManifestStore.CompletedFile(key, collector.statements, collector.rejectedIris,
                 collector.batches, predicatesFile));
-        LOG.info("done {} in {}: {} statements, {} batches", source.displayName(), elapsed(started),
-                collector.statements, collector.batches);
+        LOG.info("done {} in {}: {} statements, {} batches ({})", source.displayName(), elapsed(started),
+                collector.statements, collector.batches, progress.finishFile());
         return new FileResult(collector.statements, collector.rejectedIris, collector.batches,
                 Set.copyOf(collector.predicates.values()), null);
     }
@@ -464,6 +470,28 @@ public final class IriExtractor {
         Set<IriParts> predicates = new TreeSet<>();
         IriParquetReader.forEach(stateDir.resolve(record.predicatesFile()), r -> predicates.add(r.parts()));
         return new FileResult(record.statements(), record.rejectedIris(), record.batches(), predicates, null);
+    }
+
+    /** Counts the files of one extraction that have started and finished, for the log. */
+    private static final class Progress {
+
+        private final int total;
+        private final AtomicInteger started = new AtomicInteger();
+        private final AtomicInteger finished = new AtomicInteger();
+
+        Progress(int total) {
+            this.total = total;
+        }
+
+        /** Counts a file as started, and returns the counts for the log. */
+        String startFile() {
+            return started.incrementAndGet() + " of " + total + " started, " + finished.get() + " finished";
+        }
+
+        /** Counts a file as finished, and returns the counts for the log. */
+        String finishFile() {
+            return finished.incrementAndGet() + " of " + total + " finished, " + started.get() + " started";
+        }
     }
 
     /** What reading one source produced: its counts, or the reason it was skipped. */
