@@ -381,3 +381,13 @@ held every one open, which broke the open-file limit.
   codec dependencies (zstd-jni 1.5.7-9, and the others Hardwood lists as optional).
 - Checked: all 147 tests pass, and the 300,000-IRI extraction under the 768-file limit gives the same result.
 - The earlier notes above that name Beta2 describe the spikes at the time. The version in use is Beta3.
+
+## Comparator cost
+
+- `IriParts.compareTo` was a `Comparator` chain, which allocated and dispatched through lambdas on every comparison. It
+  is now written out, with the same order. A test checks it against the old chain on 20,000 random pairs.
+- Timed on 20 million comparisons: about 1,050 ms before and about 350 ms after.
+
+## RDF4j IRI validation
+
+- The plan for making RDF4j's IRI validation cheaper, to be upstreamed, is in `docs/rdf4j-iri-validation-plan.md`.

@@ -128,4 +128,38 @@ class IriPartsTest {
         assertTrue(IriParts.parse("http://a/x").compareTo(IriParts.parse("http://b/x")) < 0);
         assertTrue(IriParts.parse("http://h/x").compareTo(IriParts.parse("http://h/x?q")) < 0, "absent sorts first");
     }
+
+    /** The order the parts had before the comparator was inlined. It is kept here as the reference. */
+    private static final java.util.Comparator<IriParts> REFERENCE = java.util.Comparator
+            .comparing(IriParts::scheme)
+            .thenComparing(IriParts::userinfo, java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder()))
+            .thenComparing(IriParts::host, java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder()))
+            .thenComparing(IriParts::port, java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder()))
+            .thenComparing(IriParts::path)
+            .thenComparing(IriParts::query, java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder()))
+            .thenComparing(IriParts::fragment, java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder()));
+
+    /** Random parts over small alphabets, so that ties in one component or more are common. */
+    @Test
+    void compareToAgreesWithTheReferenceOrderOnRandomParts() {
+        java.util.Random random = new java.util.Random(42);
+        java.util.function.Supplier<String> text = () -> {
+            String[] pool = {null, "", "a", "b", "ab", "b/", "x"};
+            return pool[random.nextInt(pool.length)];
+        };
+        java.util.function.Supplier<IriParts> parts = () -> new IriParts(
+                random.nextBoolean() ? "http" : "https",
+                text.get(),
+                text.get(),
+                random.nextInt(4) == 0 ? null : random.nextInt(3),
+                text.get() == null ? "" : "/" + text.get(),
+                text.get(),
+                text.get());
+        for (int i = 0; i < 20_000; i++) {
+            IriParts a = parts.get();
+            IriParts b = parts.get();
+            assertEquals(Integer.signum(REFERENCE.compare(a, b)), Integer.signum(a.compareTo(b)), a + " vs " + b);
+            assertEquals(0, a.compareTo(a));
+        }
+    }
 }

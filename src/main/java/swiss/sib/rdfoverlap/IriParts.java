@@ -1,6 +1,5 @@
 package swiss.sib.rdfoverlap;
 
-import java.util.Comparator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -37,18 +36,50 @@ public record IriParts(
         String query,
         String fragment) implements Comparable<IriParts> {
 
-    private static final Comparator<IriParts> ORDER = Comparator
-            .comparing(IriParts::scheme)
-            .thenComparing(IriParts::userinfo, Comparator.nullsFirst(Comparator.naturalOrder()))
-            .thenComparing(IriParts::host, Comparator.nullsFirst(Comparator.naturalOrder()))
-            .thenComparing(IriParts::port, Comparator.nullsFirst(Comparator.naturalOrder()))
-            .thenComparing(IriParts::path)
-            .thenComparing(IriParts::query, Comparator.nullsFirst(Comparator.naturalOrder()))
-            .thenComparing(IriParts::fragment, Comparator.nullsFirst(Comparator.naturalOrder()));
-
     @Override
     public int compareTo(IriParts other) {
-        return ORDER.compare(this, other);
+        if (this == other) {
+            return 0;
+        }
+        int c = scheme.compareTo(other.scheme);
+        if (c != 0) {
+            return c;
+        }
+        c = compareNullable(userinfo, other.userinfo);
+        if (c != 0) {
+            return c;
+        }
+        c = compareNullable(host, other.host);
+        if (c != 0) {
+            return c;
+        }
+        c = compareNullable(port, other.port);
+        if (c != 0) {
+            return c;
+        }
+        c = path.compareTo(other.path);
+        if (c != 0) {
+            return c;
+        }
+        c = compareNullable(query, other.query);
+        if (c != 0) {
+            return c;
+        }
+        return compareNullable(fragment, other.fragment);
+    }
+
+    /** Orders nulls first. Written out, not through a Comparator, because this runs once per comparison in a merge. */
+    private static <T extends Comparable<? super T>> int compareNullable(T a, T b) {
+        if (a == b) {
+            return 0;
+        }
+        if (a == null) {
+            return -1;
+        }
+        if (b == null) {
+            return 1;
+        }
+        return a.compareTo(b);
     }
 
     /**
