@@ -255,6 +255,9 @@ public final class IriExtractor {
         for (ManifestStore.CompletedFile c : initial.completed()) {
             done.put(c.key(), c);
         }
+        if (resume) {
+            logResumeState(initial, inputs, done);
+        }
 
         RunPool pool = new RunPool(runsDir, output, fanIn, ROW_GROUP_ROWS, RunPool.defaultThreads(), store, initial);
         ExecutorService readers = Executors.newFixedThreadPool(readerThreads(sources.size()), runnable -> {
@@ -323,6 +326,19 @@ public final class IriExtractor {
         } finally {
             readers.shutdown();
         }
+    }
+
+    /** Logs what a resume found in the saved state, so the start of the run shows how much is left to do. */
+    private static void logResumeState(ManifestStore.Manifest state, List<Map.Entry<String, RdfSource>> inputs,
+                                       Map<String, ManifestStore.CompletedFile> done) {
+        int runs = state.sharedLevels().stream().mapToInt(List::size).sum();
+        if (state.completed().isEmpty() && runs == 0) {
+            LOG.info("resume requested but no saved state was found, starting afresh");
+            return;
+        }
+        long completed = inputs.stream().filter(input -> done.containsKey(input.getKey())).count();
+        LOG.info("resuming: {} of {} inputs already read completely, {} remaining; {} runs in {} shared levels",
+                completed, inputs.size(), inputs.size() - completed, runs, state.sharedLevels().size());
     }
 
     /**
