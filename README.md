@@ -140,7 +140,8 @@ Extract each dataset once. After that you can compare any set of datasets withou
   host, so your `~/.ssh/config`, keys, agent, `known_hosts` and `ProxyJump` apply. Passwords are never asked for, so the
   host key and key-based login must already be set up. Only absolute paths are supported. A directory is listed with `find`,
   so it reads every file below it, as a local directory does. The remote host needs a POSIX shell, `cat` and `find`. A Metalink file can be read over ssh, and its entries can be ssh URLs.
-- **Remote files:** an http(s) URL is streamed, not saved to disk first. The compression and the format come from
+- **Remote files:** an http(s) URL is streamed, not saved to disk first. Each request identifies itself as
+  `rdf-overlap-detector-bot/<version>`, with no contact details. The compression and the format come from
   the last segment of the URL, so `https://example.org/dump.nt.gz` works.
 - **Base IRI:** relative references are resolved against the URI the file was read from, so references such as
   `rdf:about=""` work.

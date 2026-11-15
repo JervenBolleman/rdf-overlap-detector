@@ -31,11 +31,13 @@ class RemoteExtractionTest {
     private HttpServer server;
     private String base;
     private final Map<String, byte[]> routes = new ConcurrentHashMap<>();
+    private final List<String> userAgents = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     @BeforeEach
     void start() throws IOException {
         server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         server.createContext("/", exchange -> {
+            userAgents.add(exchange.getRequestHeaders().getFirst("User-Agent"));
             byte[] body = routes.get(exchange.getRequestURI().getPath());
             if (body == null) {
                 exchange.sendResponseHeaders(404, -1);
@@ -66,6 +68,20 @@ class RemoteExtractionTest {
         List<String> names = new ArrayList<>();
         summary.skipped().forEach(s -> names.add(s.source()));
         return names;
+    }
+
+    /** Every HTTP request names the tool as a bot, so a server operator can tell the traffic apart. */
+    @Test
+    void requestsIdentifyTheToolAsABot() throws Exception {
+        routes.put("/data/sample.nt", sample("sample.nt"));
+
+        new IriExtractor(dir.resolve("ds")).extract(base + "/data/sample.nt");
+
+        assertTrue(!userAgents.isEmpty());
+        for (String agent : userAgents) {
+            assertTrue(agent.startsWith("rdf-overlap-detector-bot/"), agent);
+            assertTrue(agent.contains("bot"), agent);
+        }
     }
 
     @Test

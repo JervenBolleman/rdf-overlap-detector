@@ -200,6 +200,7 @@
                   <manifestEntries>
                     <Main-Class>swiss.sib.rdfoverlap.Main</Main-Class>
                     <Multi-Release>true</Multi-Release>
+                    <Implementation-Version>${project.version}</Implementation-Version>
                   </manifestEntries>
                 </transformer>
               </transformers>

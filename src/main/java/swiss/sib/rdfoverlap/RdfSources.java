@@ -35,6 +35,17 @@ import org.xml.sax.SAXException;
  */
 final class RdfSources {
 
+    /**
+     * The user agent for HTTP requests. It names the tool as a bot and gives its version, so a server operator can
+     * identify the traffic. It carries no contact details.
+     */
+    static final String USER_AGENT = "rdf-overlap-detector-bot/" + version() + " (Java HttpClient)";
+
+    private static String version() {
+        String version = RdfSources.class.getPackage().getImplementationVersion();
+        return version == null ? "dev" : version;
+    }
+
     private static final HttpClient CLIENT = HttpClient.newBuilder()
             .followRedirects(HttpClient.Redirect.NORMAL)
             .connectTimeout(Duration.ofSeconds(30))
@@ -108,7 +119,7 @@ final class RdfSources {
                 return Files.newInputStream(Path.of(uri));
             case "http":
             case "https":
-                HttpRequest request = HttpRequest.newBuilder(uri).GET().build();
+                HttpRequest request = HttpRequest.newBuilder(uri).GET().header("User-Agent", USER_AGENT).build();
                 HttpResponse<InputStream> response;
                 try {
                     response = CLIENT.send(request, HttpResponse.BodyHandlers.ofInputStream());
