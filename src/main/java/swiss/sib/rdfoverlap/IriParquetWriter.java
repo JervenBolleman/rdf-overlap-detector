@@ -9,7 +9,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 
 /**
- * Writes {@link IriRecord}s to a parquet file using {@link IriSchema}.
+ * Writes {@link IriParts} to a parquet file using {@link IriSchema}.
  *
  * <p>Rows accumulate in the current row group until {@link #endRowGroup()} is called. The extractor calls it once per
  * sorted batch, so each batch becomes one row group. Wrapping Hardwood here keeps its experimental writer API in one
@@ -30,35 +30,34 @@ public final class IriParquetWriter implements Closeable {
         this.rows = writer.rowWriter();
     }
 
-    public void write(IriRecord record) throws IOException {
-        IriParts p = record.parts();
+    public void write(IriParts parts) throws IOException {
         rows.writeRow(s -> {
-            s.setString(IriSchema.SCHEME, p.scheme());
-            if (p.userinfo() == null) {
+            s.setString(IriSchema.SCHEME, parts.scheme());
+            if (parts.userinfo() == null) {
                 s.setNull(IriSchema.USERINFO);
             } else {
-                s.setString(IriSchema.USERINFO, p.userinfo());
+                s.setString(IriSchema.USERINFO, parts.userinfo());
             }
-            if (p.host() == null) {
+            if (parts.host() == null) {
                 s.setNull(IriSchema.HOST);
             } else {
-                s.setString(IriSchema.HOST, p.host());
+                s.setString(IriSchema.HOST, parts.host());
             }
-            if (p.port() == null) {
+            if (parts.port() == null) {
                 s.setNull(IriSchema.PORT);
             } else {
-                s.setInt(IriSchema.PORT, p.port());
+                s.setInt(IriSchema.PORT, parts.port());
             }
-            s.setString(IriSchema.PATH, p.path());
-            if (p.query() == null) {
+            s.setString(IriSchema.PATH, parts.path());
+            if (parts.query() == null) {
                 s.setNull(IriSchema.QUERY);
             } else {
-                s.setString(IriSchema.QUERY, p.query());
+                s.setString(IriSchema.QUERY, parts.query());
             }
-            if (p.fragment() == null) {
+            if (parts.fragment() == null) {
                 s.setNull(IriSchema.FRAGMENT);
             } else {
-                s.setString(IriSchema.FRAGMENT, p.fragment());
+                s.setString(IriSchema.FRAGMENT, parts.fragment());
             }
         });
     }

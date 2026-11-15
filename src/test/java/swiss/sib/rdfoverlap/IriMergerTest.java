@@ -24,7 +24,7 @@ class IriMergerTest {
         sorted.sort(null);
         try (IriParquetWriter writer = new IriParquetWriter(file)) {
             for (String iri : sorted) {
-                writer.write(IriRecord.of(iri));
+                writer.write(IriParts.parse(iri));
             }
             writer.endRowGroup();
         }
@@ -33,7 +33,7 @@ class IriMergerTest {
 
     private static List<String> readIris(Path file) throws IOException {
         List<String> iris = new ArrayList<>();
-        IriParquetReader.forEach(file, r -> iris.add(r.iri()));
+        IriParquetReader.forEach(file, r -> iris.add(r.toIri()));
         return iris;
     }
 

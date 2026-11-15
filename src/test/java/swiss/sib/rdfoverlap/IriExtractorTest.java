@@ -304,12 +304,12 @@ class IriExtractorTest {
         IriExtractor.ExtractionSummary summary = new IriExtractor(dir.resolve("empty-port")).extract(input);
 
         assertEquals(0, summary.rejectedIris());
-        List<IriRecord> records = new ArrayList<>();
+        List<IriParts> records = new ArrayList<>();
         IriParquetReader.forEach(summary.output(), records::add);
         // The empty port is the scheme's default, so it is not kept. The record is the host and the path.
-        IriRecord hostIri = records.stream().filter(r -> "h".equals(r.parts().host())).findFirst().orElseThrow();
-        assertEquals("h", hostIri.parts().host());
-        assertNull(hostIri.parts().port());
+        IriParts hostIri = records.stream().filter(r -> "h".equals(r.host())).findFirst().orElseThrow();
+        assertEquals("h", hostIri.host());
+        assertNull(hostIri.port());
     }
 
     private IriExtractor.ExtractionSummary extractSelfLoops(int count, int batchSize, String name) throws IOException {
@@ -336,7 +336,7 @@ class IriExtractorTest {
     private static List<String> readIris(List<Path> runs) throws IOException {
         List<String> iris = new ArrayList<>();
         for (Path run : runs) {
-            IriParquetReader.forEach(run, record -> iris.add(record.iri()));
+            IriParquetReader.forEach(run, record -> iris.add(record.toIri()));
         }
         return iris;
     }

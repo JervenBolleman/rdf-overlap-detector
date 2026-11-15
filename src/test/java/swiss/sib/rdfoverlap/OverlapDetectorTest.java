@@ -25,7 +25,7 @@ class OverlapDetectorTest {
         sorted.sort(null);
         try (IriParquetWriter writer = new IriParquetWriter(irisFile)) {
             for (String iri : sorted) {
-                writer.write(IriRecord.of(iri));
+                writer.write(IriParts.parse(iri));
             }
             writer.endRowGroup();
         }

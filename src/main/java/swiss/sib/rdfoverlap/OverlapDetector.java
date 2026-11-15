@@ -153,7 +153,7 @@ public final class OverlapDetector {
         TreeMap<RangeKey.Range, Long> counts = new TreeMap<>();
         try (RunCursor cursor = new RunCursor(irisFile)) {
             while (cursor.current() != null) {
-                counts.merge(RangeKey.of(cursor.current().parts(), depth), 1L, Long::sum);
+                counts.merge(RangeKey.of(cursor.current(), depth), 1L, Long::sum);
                 cursor.advance();
             }
         }
@@ -204,7 +204,7 @@ public final class OverlapDetector {
                 } else if (order > 0) {
                     b.advance();
                 } else {
-                    counts.merge(RangeKey.of(a.current().parts(), depth), 1L, Long::sum);
+                    counts.merge(RangeKey.of(a.current(), depth), 1L, Long::sum);
                     a.advance();
                     b.advance();
                 }

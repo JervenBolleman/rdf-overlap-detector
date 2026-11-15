@@ -468,7 +468,7 @@ public final class IriExtractor {
     /** A source read completely in an earlier run: its counts and predicates come from the saved state. */
     private static FileResult restored(ManifestStore.CompletedFile record, Path stateDir) throws IOException {
         Set<IriParts> predicates = new TreeSet<>();
-        IriParquetReader.forEach(stateDir.resolve(record.predicatesFile()), r -> predicates.add(r.parts()));
+        IriParquetReader.forEach(stateDir.resolve(record.predicatesFile()), r -> predicates.add(r));
         return new FileResult(record.statements(), record.rejectedIris(), record.batches(), predicates, null);
     }
 
@@ -572,7 +572,7 @@ public final class IriExtractor {
     private static void writePredicates(Path file, Set<IriParts> predicates) throws IOException {
         try (IriParquetWriter writer = new IriParquetWriter(file)) {
             for (IriParts parts : predicates) {
-                writer.write(new IriRecord(parts));
+                writer.write(parts);
             }
             if (!predicates.isEmpty()) {
                 writer.endRowGroup();
@@ -663,7 +663,7 @@ public final class IriExtractor {
             Path run = runsDir.resolve(token + String.format("-run-%06d.parquet", batches));
             try (IriParquetWriter writer = new IriParquetWriter(run)) {
                 for (IriParts parts : sorted) {
-                    writer.write(new IriRecord(parts));
+                    writer.write(parts);
                 }
                 writer.endRowGroup();
             } catch (IOException e) {

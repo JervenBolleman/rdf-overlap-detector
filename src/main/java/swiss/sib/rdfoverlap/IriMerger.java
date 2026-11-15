@@ -11,7 +11,7 @@ import java.util.PriorityQueue;
 /**
  * Merges sorted parquet files of IRIs into one sorted, deduplicated file.
  *
- * <p>The merge keeps one cursor per input in a priority queue, so memory use is one record per input plus the output
+ * <p>The merge keeps one cursor per input in a priority queue, so memory use is one IRI per input plus the output
  * writer's buffer. Callers choose how many inputs to merge at once, because each open input is an open file.
  */
 final class IriMerger {
@@ -43,14 +43,14 @@ final class IriMerger {
 
             long written = 0;
             long inGroup = 0;
-            IriRecord last = null;
+            IriParts last = null;
             try (IriParquetWriter writer = new IriParquetWriter(output)) {
                 while (!queue.isEmpty()) {
                     RunCursor cursor = queue.poll();
-                    IriRecord record = cursor.current();
-                    if (!record.equals(last)) {
-                        writer.write(record);
-                        last = record;
+                    IriParts parts = cursor.current();
+                    if (!parts.equals(last)) {
+                        writer.write(parts);
+                        last = parts;
                         written++;
                         inGroup++;
                         if (inGroup == rowGroupRows) {
@@ -77,12 +77,12 @@ final class IriMerger {
 
     /** Checks that the output is strictly increasing and that its footer row count matches the rows written. */
     static void verify(Path output, long expectedRows) throws IOException {
-        IriRecord[] previous = {null};
-        long read = IriParquetReader.forEach(output, record -> {
-            if (previous[0] != null && previous[0].compareTo(record) >= 0) {
-                throw new IllegalStateException("output not strictly increasing at " + record.iri());
+        IriParts[] previous = {null};
+        long read = IriParquetReader.forEach(output, parts -> {
+            if (previous[0] != null && previous[0].compareTo(parts) >= 0) {
+                throw new IllegalStateException("output not strictly increasing at " + parts.toIri());
             }
-            previous[0] = record;
+            previous[0] = parts;
         });
         if (read != expectedRows || IriParquetReader.rowCount(output) != expectedRows) {
             throw new IllegalStateException("output has " + read + " rows, expected " + expectedRows);

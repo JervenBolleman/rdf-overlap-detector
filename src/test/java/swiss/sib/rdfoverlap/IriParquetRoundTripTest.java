@@ -29,17 +29,17 @@ class IriParquetRoundTripTest {
     @Test
     void recordsSurviveTheRoundTrip() throws IOException {
         Path file = dir.resolve("iris.parquet");
-        List<IriRecord> written = new ArrayList<>();
+        List<IriParts> written = new ArrayList<>();
         try (IriParquetWriter writer = new IriParquetWriter(file)) {
             for (String iri : TRICKY) {
-                IriRecord record = IriRecord.of(iri);
-                written.add(record);
-                writer.write(record);
+                IriParts parts = IriParts.parse(iri);
+                written.add(parts);
+                writer.write(parts);
             }
             writer.endRowGroup();
         }
 
-        List<IriRecord> read = new ArrayList<>();
+        List<IriParts> read = new ArrayList<>();
         long count = IriParquetReader.forEach(file, read::add);
 
         assertEquals(written.size(), count);
@@ -53,7 +53,7 @@ class IriParquetRoundTripTest {
         int batch = 10_000;
         try (IriParquetWriter writer = new IriParquetWriter(file)) {
             for (int i = 0; i < total; i++) {
-                writer.write(IriRecord.of("http://example.org/item/" + i));
+                writer.write(IriParts.parse("http://example.org/item/" + i));
                 if ((i + 1) % batch == 0) {
                     writer.endRowGroup();
                 }

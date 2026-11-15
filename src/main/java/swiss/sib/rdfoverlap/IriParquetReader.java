@@ -22,7 +22,7 @@ public final class IriParquetReader {
      * @return the number of rows read
      * @throws IOException if the file cannot be read
      */
-    public static long forEach(Path file, Consumer<IriRecord> consumer) throws IOException {
+    public static long forEach(Path file, Consumer<IriParts> consumer) throws IOException {
         NativeCodecs.loadZstdIfNative();
         long count = 0;
         try (ParquetFileReader reader = ParquetFileReader.open(InputFile.of(file));
@@ -64,18 +64,18 @@ public final class IriParquetReader {
         }
     }
 
-    static IriRecord toRecord(StructAccessor row) {
+    static IriParts toRecord(StructAccessor row) {
         String userinfo = optionalString(row, IriSchema.USERINFO);
         String host = optionalString(row, IriSchema.HOST);
         Integer port = row.isNull(IriSchema.PORT) ? null : row.getInt(IriSchema.PORT);
-        return new IriRecord(new IriParts(
+        return new IriParts(
                 row.getString(IriSchema.SCHEME),
                 userinfo,
                 host,
                 port,
                 row.getString(IriSchema.PATH),
                 optionalString(row, IriSchema.QUERY),
-                optionalString(row, IriSchema.FRAGMENT)));
+                optionalString(row, IriSchema.FRAGMENT));
     }
 
     private static String optionalString(StructAccessor row, int index) {
