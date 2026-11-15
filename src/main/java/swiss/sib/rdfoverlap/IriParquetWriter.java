@@ -1,6 +1,7 @@
 package swiss.sib.rdfoverlap;
 
 import dev.hardwood.OutputFile;
+import dev.hardwood.writer.ColumnEncoding;
 import dev.hardwood.writer.ParquetFileWriter;
 import dev.hardwood.writer.RowWriter;
 import dev.hardwood.writer.WriterConfig;
@@ -20,8 +21,16 @@ public final class IriParquetWriter implements Closeable {
     private final ParquetFileWriter writer;
     private final RowWriter rows;
 
+    /**
+     * Paths are sorted within a batch, so neighbours share long prefixes. Delta-encoding them removes those prefixes
+     * before compression, which is several times smaller than the dictionary or plain encoding AUTO picks for them.
+     */
+    private static final WriterConfig CONFIG = WriterConfig.builder()
+            .encoding("path", ColumnEncoding.DELTA_BYTE_ARRAY)
+            .build();
+
     public IriParquetWriter(Path file) throws IOException {
-        this(file, WriterConfig.defaults());
+        this(file, CONFIG);
     }
 
     IriParquetWriter(Path file, WriterConfig config) throws IOException {

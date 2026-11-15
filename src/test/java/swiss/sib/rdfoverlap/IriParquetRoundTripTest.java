@@ -47,6 +47,28 @@ class IriParquetRoundTripTest {
     }
 
     @Test
+    void sortedPathsWithSharedPrefixesSurviveTheRoundTrip() throws IOException {
+        Path file = dir.resolve("prefixes.parquet");
+        List<IriParts> written = new ArrayList<>();
+        for (int i = 0; i < 5_000; i++) {
+            written.add(IriParts.parse("http://example.org/a/very/long/shared/prefix/segment/" + i));
+        }
+        written.add(IriParts.parse("http://example.org/a/very/long/shared/prefix/segment/" + "x".repeat(300)));
+        written.sort(IriParts::compareTo);
+        try (IriParquetWriter writer = new IriParquetWriter(file)) {
+            for (IriParts parts : written) {
+                writer.write(parts);
+            }
+            writer.endRowGroup();
+        }
+
+        List<IriParts> read = new ArrayList<>();
+        IriParquetReader.forEach(file, read::add);
+
+        assertEquals(written, read);
+    }
+
+    @Test
     void rowGroupsFollowTheBatchBoundaries() throws IOException {
         Path file = dir.resolve("batches.parquet");
         int total = 25_000;
