@@ -18,7 +18,7 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
 
@@ -59,11 +59,11 @@ jobs:
     needs: validate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '25'
@@ -84,7 +84,7 @@ jobs:
           mkdir dist
           cp "target/rdf-overlap-detector-$VERSION.jar" "dist/rdf-overlap-detector-$VERSION-uber.jar"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: uber-jar
           path: dist/*
@@ -109,7 +109,7 @@ jobs:
             ext: '.exe'
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
 
@@ -163,7 +163,7 @@ jobs:
           mkdir dist
           cp "target/rdf-overlap-detector$EXT" "dist/rdf-overlap-detector-$VERSION-$PLATFORM$EXT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.platform }}
           path: dist/*
@@ -172,12 +172,12 @@ jobs:
     needs: [validate, uber-jar, native]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
